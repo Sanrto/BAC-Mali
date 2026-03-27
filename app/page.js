@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { supabase } from '@/lib/supabase'
 
 const CENTRES = [
   'BAMAKO RIVE DROITE',
@@ -36,6 +37,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false)
   const [result, setResult]   = useState(null)   // null | { found: false } | { found: true, candidat: {} }
   const [error, setError]     = useState('')
+  const [total, setTotal] = useState(0)
 
   async function handleSearch(e) {
     e.preventDefault()
@@ -69,6 +71,18 @@ export default function Home() {
   }
 
   const mention = result?.candidat?.mention
+  useEffect(() => {
+  const fetchTotal = async () => {
+    const { count } = await supabase
+      .from('candidats')
+      .select('*', { count: 'exact', head: true })
+      .eq('annee', 2025)
+
+    setTotal(count || 0)
+  }
+
+  fetchTotal()
+}, [])
   const mentionStyle = MENTION_COLOR[mention] || MENTION_COLOR['PASSABLE']
 
   return (
@@ -713,7 +727,7 @@ export default function Home() {
           {!result && (
             <div className="stats-strip">
               <div className="stat-box">
-                <div className="stat-num">8 353</div>
+                <div className="stat-num">{total.toLocaleString()}</div>
                 <div className="stat-label">Admis 2025</div>
               </div>
               <div className="stat-box">
