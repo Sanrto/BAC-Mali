@@ -627,9 +627,7 @@ export default function Home() {
                     >
                       <option value="">Choisir…</option>
                       {CENTRES.map(c => (
-  <option key={c.value} value={c.value}>
-    {c.label}
-  </option>
+  <option key={c} value={c}>{c}</option>
 ))}
                     </select>
                   </div>
