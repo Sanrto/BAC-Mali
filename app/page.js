@@ -773,7 +773,7 @@ export default function Home() {
             Données officielles — Ministère de l&apos;Éducation Nationale du Mali &bull; Session de juin 2025
           </p>
           <p style={{ marginTop: 6 }}>
-            Un problème ? <a href="mailto:contact@example.com">Contacte-nous</a>
+            <a href="https://t.me/lordelsanto" target="_blank" rel="noopener noreferrer">Contactez-nous</a>
           </p>
         </footer>
 
