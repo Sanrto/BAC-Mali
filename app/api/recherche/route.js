@@ -4,15 +4,21 @@ import { NextResponse } from 'next/server'
 const CENTRES = [
   'BAMAKO RIVE DROITE',
   'BAMAKO RIVE GAUCHE',
-  'BAMAKO NORD',
+  'KATI',
+  'KITA',
   'KAYES',
   'KOULIKORO',
+  'BANDIAGARA',
+  'BOUGOUNI',
   'SIKASSO',
   'SEGOU',
+  'SAN',
+  'KOUTIALA',
+  'KALABANCORO',
   'MOPTI',
+  'DOUENTZA',
   'TOMBOUCTOU',
-  'GAO',
-  'KIDAL',
+  'BASSIKOUNOU',
 ]
 
 export async function GET(request) {
