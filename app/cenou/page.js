@@ -1,346 +1,183 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { getSupabaseClient } from '../../lib/supabaseClient'
+import { cleanText, computeCenouScore } from '../../lib/content-utils'
 
-const QUESTIONS = [
-  {
-    id: 'nationalite',
-    label: 'Êtes-vous de nationalité malienne ?',
-    options: [{ val: 'oui', label: 'Oui' }, { val: 'non', label: 'Non' }],
-  },
-  {
-    id: 'etablissement',
-    label: 'Êtes-vous inscrit(e) dans un établissement public d\'enseignement supérieur au Mali ?',
-    hint: 'USTTB, IPR/IFRA, ENSUP, IFM, ENI, etc.',
-    options: [{ val: 'oui', label: 'Oui, public' }, { val: 'non', label: 'Non, privé ou pas encore inscrit' }],
-  },
-  {
-    id: 'revenu',
-    label: 'Revenus mensuels totaux de votre foyer ?',
-    hint: 'Revenus nets du père, de la mère ou tuteur légal',
-    options: [
-      { val: 'bas',    label: 'Moins de 100 000 F CFA / mois' },
-      { val: 'moyen',  label: 'Entre 100 000 et 300 000 F CFA / mois' },
-      { val: 'eleve',  label: 'Plus de 300 000 F CFA / mois' },
-    ],
-  },
-  {
-    id: 'distance',
-    label: 'Distance entre votre domicile d\'origine et Bamako ?',
-    options: [
-      { val: 'proche',  label: 'Moins de 50 km' },
-      { val: 'moyen',   label: '50 à 200 km' },
-      { val: 'loin',    label: 'Plus de 200 km' },
-    ],
-  },
-  {
-    id: 'logement',
-    label: 'Disposez-vous d\'un logement à Bamako (famille proche) ?',
-    options: [
-      { val: 'oui', label: 'Oui, j\'ai un logement chez un proche' },
-      { val: 'non', label: 'Non, je dois trouver un logement' },
-    ],
-  },
-  {
-    id: 'boursier',
-    label: 'Êtes-vous déjà boursier(ère) de l\'État malien ?',
-    options: [
-      { val: 'oui', label: 'Oui, je perçois déjà une bourse' },
-      { val: 'non', label: 'Non' },
-    ],
-  },
-]
-
-function computeResult(answers) {
-  if (answers.nationalite === 'non')     return 'ineligible'
-  if (answers.etablissement === 'non')   return 'ineligible_prive'
-  if (answers.boursier === 'oui')        return 'deja_boursier'
-  if (answers.revenu === 'eleve')        return 'ineligible_revenu'
-
-  const score = [
-    answers.revenu    === 'bas'    ? 3 : answers.revenu  === 'moyen' ? 1 : 0,
-    answers.distance  === 'loin'   ? 2 : answers.distance === 'moyen' ? 1 : 0,
-    answers.logement  === 'non'    ? 2 : 0,
-  ].reduce((a, b) => a + b, 0)
-
-  if (score >= 5) return 'eligible_prioritaire'
-  if (score >= 3) return 'eligible'
-  return 'partiel'
+function groupByCategory(rows) {
+  return rows.reduce((acc, row) => {
+    const key = cleanText(row.categorie)
+    if (!acc[key]) acc[key] = []
+    acc[key].push(row)
+    return acc
+  }, {})
 }
-
-const RESULTS = {
-  ineligible: {
-    icon: '🚫', color: '#FEF2F2', border: '#FECACA', textColor: '#991B1B',
-    title: 'Non éligible',
-    body: 'La bourse CENOU est réservée aux étudiants de nationalité malienne. Renseignez-vous auprès de votre établissement pour d\'autres aides disponibles.',
-    actions: [],
-  },
-  ineligible_prive: {
-    icon: '⚠️', color: '#FBF4E0', border: '#F5E6C0', textColor: '#8B6914',
-    title: 'Non éligible (établissement privé)',
-    body: 'La bourse d\'État est réservée aux étudiants des établissements publics. Si vous êtes en établissement privé agréé, renseignez-vous sur les aides spécifiques proposées par votre école.',
-    actions: [],
-  },
-  deja_boursier: {
-    icon: '✅', color: '#EEF8F1', border: '#A8DDB8', textColor: '#145A30',
-    title: 'Déjà boursier(ère)',
-    body: 'Vous bénéficiez déjà d\'une bourse de l\'État. Pour renouveler votre bourse ou changer de catégorie, contactez directement le CENOU avec votre relevé de notes.',
-    actions: ['renouvellement'],
-  },
-  ineligible_revenu: {
-    icon: '💼', color: '#F5F5F5', border: '#E0E0E0', textColor: '#555',
-    title: 'Probablement non éligible',
-    body: 'Compte tenu du niveau de revenus du foyer, vous ne correspondez pas aux critères de ressources du CENOU. Vous pouvez néanmoins déposer un dossier — la décision finale appartient à la commission.',
-    actions: ['dossier'],
-  },
-  eligible_prioritaire: {
-    icon: '🌟', color: '#EEF8F1', border: '#A8DDB8', textColor: '#0D3D22',
-    title: 'Probablement éligible — Prioritaire',
-    body: 'Votre profil correspond aux critères prioritaires du CENOU. Vous avez de bonnes chances d\'obtenir une bourse complète (hébergement + restauration + allocation mensuelle). Préparez votre dossier dès maintenant.',
-    actions: ['dossier', 'documents'],
-  },
-  eligible: {
-    icon: '✅', color: '#EEF8F1', border: '#A8DDB8', textColor: '#145A30',
-    title: 'Probablement éligible',
-    body: 'Votre profil est compatible avec une aide CENOU. Selon les places disponibles, vous pourrez bénéficier de la restauration et/ou d\'une allocation partielle. Déposez votre dossier dans les délais.',
-    actions: ['dossier', 'documents'],
-  },
-  partiel: {
-    icon: '🍽️', color: '#FBF4E0', border: '#F5E6C0', textColor: '#8B6914',
-    title: 'Éligible — Restauration seulement',
-    body: 'Vous pouvez probablement bénéficier du service de restauration du CENOU à tarif réduit. L\'hébergement et la bourse complète sont attribués en priorité aux situations les plus précaires.',
-    actions: ['dossier'],
-  },
-}
-
-const DOCUMENTS = [
-  'Extrait d\'acte de naissance (original)',
-  'Certificat de nationalité malienne',
-  'Attestation d\'inscription ou certificat de scolarité (année en cours)',
-  'Relevé de notes du BAC ou dernier relevé académique',
-  'Attestation de revenus du père / de la mère (mairie ou employeur)',
-  'Certificat de résidence du foyer familial',
-  '2 photos d\'identité récentes',
-  'Lettre de demande de bourse adressée au Directeur du CENOU',
-]
 
 export default function CenouPage() {
-  const [answers, setAnswers] = useState({})
-  const [step, setStep]       = useState(0)   // 0 = intro, 1-6 = questions, 7 = result
-  const [showDocs, setShowDocs] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [rules, setRules] = useState([])
+  const [answers, setAnswers] = useState({
+    nationalite: 'oui',
+    statutEtudiant: 'oui',
+    moyenneBac: '',
+    dureeLycee: '3',
+    genre: 'masculin',
+    orphelin: 'non',
+    serieBac: '',
+    aideSociale: 'non',
+  })
+  const [submitted, setSubmitted] = useState(false)
 
-  const currentQ  = QUESTIONS[step - 1]
-  const totalSteps = QUESTIONS.length
-  const result     = step > totalSteps ? computeResult(answers) : null
-  const res        = result ? RESULTS[result] : null
+  useEffect(() => {
+    let cancelled = false
+    async function loadRules() {
+      setLoading(true)
+      setError('')
+      try {
+        const { data, error: queryError } = await getSupabaseClient().from('cenou_rules').select('*').order('id', { ascending: true })
+        if (queryError) throw queryError
+        if (!cancelled) setRules(Array.isArray(data) ? data : [])
+      } catch (err) {
+        if (!cancelled) setError(err.message || 'Impossible de charger les règles CENOU.')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    loadRules()
+    return () => { cancelled = true }
+  }, [])
 
-  function handleAnswer(val) {
-    const newAnswers = { ...answers, [currentQ.id]: val }
-    setAnswers(newAnswers)
-    if (step < totalSteps) setStep(step + 1)
-    else setStep(totalSteps + 1)
+  const grouped = useMemo(() => groupByCategory(rules), [rules])
+  const requiredConditions = grouped.condition_generale || []
+  const scoringRules = grouped.bareme || []
+  const bonusRules = grouped.bonification || []
+  const specialAidRules = grouped.aide_sociale || []
+  const seriesExamples = useMemo(() => (grouped.serie_concernee || []).map(row => cleanText(row.condition)).filter(Boolean), [grouped])
+  const documents = grouped.piece || []
+  const conditionalDocuments = grouped.piece_conditionnelle || []
+  const procedureRules = grouped.procedure || []
+  const resultRules = grouped.resultat || []
+  const ambiguityRules = grouped.ambiguite || []
+
+  const result = useMemo(() => {
+    if (!submitted) return null
+    return computeCenouScore({
+      isMalian: answers.nationalite === 'oui',
+      isRegularStudent: answers.statutEtudiant === 'oui',
+      moyenneBac: answers.moyenneBac,
+      dureeLycee: answers.dureeLycee,
+      genre: answers.genre,
+      isOrphan: answers.orphelin === 'oui',
+      serieBac: answers.serieBac,
+      knownScientificSeries: seriesExamples,
+    })
+  }, [answers, submitted, seriesExamples])
+
+  function updateField(key, value) { setAnswers(prev => ({ ...prev, [key]: value })) }
+  function handleSubmit(event) { event.preventDefault(); setSubmitted(true) }
+  function resetForm() {
+    setSubmitted(false)
+    setAnswers({ nationalite: 'oui', statutEtudiant: 'oui', moyenneBac: '', dureeLycee: '3', genre: 'masculin', orphelin: 'non', serieBac: '', aideSociale: 'non' })
   }
 
-  function reset() { setAnswers({}); setStep(0); setShowDocs(false) }
+  const canCompute = answers.moyenneBac !== '' && answers.serieBac !== ''
 
   return (
     <>
       <style>{`
         .cenou-page { min-height: 80vh; display: flex; flex-direction: column; }
-        .cenou-hero {
-          background: var(--green-800); color: white;
-          padding: 48px 24px 72px; text-align: center;
-        }
-        .cenou-eyebrow {
-          font-size: 11px; font-weight: 600; letter-spacing: 0.14em;
-          text-transform: uppercase; color: var(--gold-400); margin-bottom: 12px;
-        }
-        .cenou-title {
-          font-family: var(--font-display); font-size: clamp(26px, 4vw, 42px);
-          font-weight: 400; line-height: 1.15; letter-spacing: -0.02em; margin-bottom: 12px;
-        }
+        .cenou-hero { background: var(--green-800); color: white; padding: 48px 24px 72px; text-align: center; }
+        .cenou-eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold-400); margin-bottom: 12px; }
+        .cenou-title { font-family: var(--font-display); font-size: clamp(26px, 4vw, 42px); font-weight: 400; line-height: 1.15; letter-spacing: -0.02em; margin-bottom: 12px; }
         .cenou-title em { font-style: italic; color: var(--gold-400); }
-        .cenou-sub { font-size: 15px; color: rgba(255,255,255,0.65); max-width: 420px; margin: 0 auto; }
-
-        .cenou-body {
-          flex: 1; display: flex; flex-direction: column; align-items: center;
-          padding: 0 16px 56px; margin-top: -40px;
-        }
-        .cenou-card {
-          background: var(--white); border-radius: var(--radius-xl);
-          box-shadow: var(--shadow-lg); padding: 36px 32px; width: 100%;
-          max-width: 560px; animation: fadeUp .5s ease both;
-        }
-
-        /* Progress */
-        .progress-bar-wrap { margin-bottom: 24px; }
-        .progress-label { font-size: 12px; color: var(--ink-3); margin-bottom: 8px; }
-        .progress-bar { height: 4px; background: var(--paper-2); border-radius: 2px; overflow: hidden; }
-        .progress-fill { height: 100%; background: var(--green-500); transition: width .3s ease; border-radius: 2px; }
-
-        /* Question */
-        .q-label { font-family: var(--font-display); font-size: 19px; font-weight: 500; color: var(--ink); margin-bottom: 6px; line-height: 1.35; }
-        .q-hint  { font-size: 12px; color: var(--ink-3); margin-bottom: 20px; }
-        .options-list { display: flex; flex-direction: column; gap: 10px; }
-        .option-btn {
-          padding: 15px 18px; border-radius: var(--radius-md); border: 2px solid var(--paper-2);
-          background: var(--paper); font-family: var(--font-body); font-size: 14px;
-          color: var(--ink); text-align: left; cursor: pointer; transition: all .15s;
-        }
-        .option-btn:hover { border-color: var(--green-400); background: var(--green-50); }
-
-        /* Intro */
-        .intro-icon { font-size: 48px; margin-bottom: 16px; text-align: center; }
-        .intro-title { font-family: var(--font-display); font-size: 22px; font-weight: 500; color: var(--ink); margin-bottom: 10px; }
-        .intro-body  { font-size: 14px; color: var(--ink-2); line-height: 1.7; margin-bottom: 8px; }
-        .btn-start {
-          width: 100%; margin-top: 24px; padding: 15px;
-          background: var(--green-700); color: white; border: none;
-          border-radius: var(--radius-md); font-family: var(--font-body);
-          font-size: 15px; font-weight: 600; cursor: pointer; transition: background .15s;
-        }
-        .btn-start:hover { background: var(--green-800); }
-
-        /* Result */
-        .result-box {
-          padding: 24px; border-radius: var(--radius-lg);
-          border: 2px solid; margin-bottom: 20px; text-align: center;
-        }
-        .result-icon { font-size: 40px; margin-bottom: 12px; }
-        .result-title { font-family: var(--font-display); font-size: 22px; font-weight: 500; margin-bottom: 8px; }
-        .result-body  { font-size: 14px; line-height: 1.7; }
-
-        .docs-toggle {
-          width: 100%; padding: 12px; border-radius: var(--radius-md);
-          border: 1.5px solid var(--green-200); background: var(--green-50);
-          color: var(--green-700); font-family: var(--font-body); font-size: 14px;
-          font-weight: 600; cursor: pointer; transition: all .15s; margin-top: 12px;
-        }
-        .docs-toggle:hover { background: var(--green-100); }
-        .docs-list {
-          margin-top: 14px; padding: 18px 20px;
-          background: var(--paper); border-radius: var(--radius-md); list-style: none;
-        }
-        .docs-list li {
-          font-size: 13px; color: var(--ink-2); padding: 6px 0;
-          border-bottom: 1px solid var(--paper-2); display: flex; gap: 8px;
-          align-items: flex-start;
-        }
-        .docs-list li:last-child { border-bottom: none; }
-        .btn-reset {
-          width: 100%; margin-top: 16px; padding: 12px;
-          background: var(--paper); color: var(--ink-2);
-          border: 1.5px solid var(--paper-2); border-radius: var(--radius-md);
-          font-family: var(--font-body); font-size: 14px; cursor: pointer;
-          transition: background .15s;
-        }
-        .btn-reset:hover { background: var(--paper-2); }
-
-        .disclaimer {
-          margin-top: 16px; padding: 12px 16px;
-          background: var(--gold-50); border: 1px solid var(--gold-100);
-          border-radius: var(--radius-md); font-size: 12px; color: var(--gold-700); line-height: 1.6;
-        }
-
-        @media (max-width: 480px) {
-          .cenou-card { padding: 24px 18px; }
-          .cenou-hero { padding: 36px 20px 64px; }
-        }
+        .cenou-sub { font-size: 15px; color: rgba(255,255,255,0.65); max-width: 520px; margin: 0 auto; }
+        .cenou-body { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 0 16px 56px; margin-top: -40px; }
+        .cenou-card { background: var(--white); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg); padding: 32px; width: 100%; max-width: 920px; animation: fadeUp .5s ease both; }
+        .grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 20px; }
+        .section-title { font-family: var(--font-display); font-size: 22px; font-weight: 500; color: var(--ink); margin-bottom: 8px; }
+        .section-desc { font-size: 14px; color: var(--ink-3); line-height: 1.6; margin-bottom: 20px; }
+        .field { margin-bottom: 16px; }
+        .field label { display: block; font-size: 12px; font-weight: 700; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+        .field input, .field select { width: 100%; padding: 13px 14px; border-radius: 12px; border: 1.5px solid var(--paper-2); background: var(--paper); font-size: 14px; color: var(--ink); outline: none; }
+        .field input:focus, .field select:focus { border-color: var(--green-400); background: var(--white); }
+        .radio-list { display: flex; flex-wrap: wrap; gap: 10px; }
+        .radio-pill { padding: 10px 14px; border-radius: 999px; border: 1.5px solid var(--paper-2); background: var(--paper); font-size: 13px; cursor: pointer; transition: all .15s; color: var(--ink-2); }
+        .radio-pill.active { background: var(--green-50); border-color: var(--green-400); color: var(--green-700); }
+        .btn-submit, .btn-reset { width: 100%; padding: 14px; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer; font-family: var(--font-body); transition: background .15s, border-color .15s; }
+        .btn-submit { background: var(--green-700); color: white; border: none; }
+        .btn-submit:hover:not(:disabled) { background: var(--green-800); }
+        .btn-submit:disabled { opacity: .45; cursor: not-allowed; }
+        .btn-reset { margin-top: 10px; background: var(--paper); border: 1.5px solid var(--paper-2); color: var(--ink-2); }
+        .side-block { background: var(--paper); border: 1px solid var(--paper-2); border-radius: 16px; padding: 18px; margin-bottom: 14px; }
+        .side-block h3 { font-size: 14px; font-weight: 700; color: var(--ink); margin-bottom: 10px; }
+        .plain-list { padding-left: 18px; }
+        .plain-list li { margin-bottom: 8px; font-size: 13px; color: var(--ink-2); line-height: 1.55; }
+        .result-box { margin-top: 18px; padding: 20px; border-radius: 16px; border: 1.5px solid var(--paper-2); background: var(--white); }
+        .result-title { font-family: var(--font-display); font-size: 20px; font-weight: 500; color: var(--ink); margin-bottom: 8px; }
+        .score-pill { display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 999px; background: var(--green-50); border: 1px solid var(--green-200); color: var(--green-700); font-size: 13px; font-weight: 700; margin-bottom: 12px; }
+        .result-text { font-size: 14px; color: var(--ink-2); line-height: 1.7; }
+        .breakdown { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+        .breakdown-item { padding: 12px 14px; border-radius: 14px; background: var(--paper); border: 1px solid var(--paper-2); }
+        .breakdown-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+        .breakdown-label { font-size: 13px; font-weight: 700; color: var(--ink); }
+        .breakdown-points { font-size: 12px; font-weight: 700; color: var(--green-700); }
+        .breakdown-value { font-size: 12px; color: var(--ink-3); }
+        .note-box { margin-top: 14px; padding: 14px 16px; border-radius: 14px; background: var(--gold-50); border: 1px solid var(--gold-100); font-size: 13px; color: var(--gold-700); line-height: 1.65; }
+        .state-box { background: var(--white); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg); padding: 28px; width: 100%; max-width: 760px; text-align: center; }
+        @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+        @media (max-width: 480px) { .cenou-card { padding: 24px 18px; } .cenou-hero { padding: 36px 20px 64px; } }
       `}</style>
-
       <div className="cenou-page">
         <section className="cenou-hero">
-          <p className="cenou-eyebrow">🏛️ Bourse & Aides sociales</p>
-          <h1 className="cenou-title">Éligibilité <em>CENOU</em></h1>
-          <p className="cenou-sub">Répondez à 6 questions pour savoir si vous êtes probablement éligible à une aide du Centre National des Œuvres Universitaires.</p>
+          <p className="cenou-eyebrow">🏛️ Test CENOU</p>
+          <h1 className="cenou-title">Éligibilité <em>CENOU / Bourse</em></h1>
+          <p className="cenou-sub">Le calcul ci-dessous utilise les critères importés depuis votre table <strong>cenou_rules</strong> : conditions générales, barème, bonifications et pièces à fournir.</p>
         </section>
-
         <div className="cenou-body">
-          <div className="cenou-card">
-
-            {/* INTRO */}
-            {step === 0 && (
-              <>
-                <div className="intro-icon">🏛️</div>
-                <h2 className="intro-title">Qu'est-ce que le CENOU ?</h2>
-                <p className="intro-body">
-                  Le <strong>Centre National des Œuvres Universitaires (CENOU)</strong> est l'organisme malien qui attribue des aides sociales aux étudiants : bourse mensuelle, hébergement en cité universitaire, et restauration à tarif réduit.
-                </p>
-                <p className="intro-body">
-                  Ce test rapide (6 questions) vous donne une <strong>estimation indicative</strong> de votre éligibilité, avant de constituer votre dossier officiel.
-                </p>
-                <button className="btn-start" onClick={() => setStep(1)}>
-                  Commencer le test →
-                </button>
-              </>
-            )}
-
-            {/* QUESTIONS */}
-            {step >= 1 && step <= totalSteps && (
-              <>
-                <div className="progress-bar-wrap">
-                  <div className="progress-label">Question {step} sur {totalSteps}</div>
-                  <div className="progress-bar">
-                    <div className="progress-fill" style={{ width: `${(step / totalSteps) * 100}%` }} />
-                  </div>
+          {loading && <div className="state-box"><h2 className="section-title">Chargement…</h2><p className="section-desc">Récupération des règles CENOU depuis Supabase.</p></div>}
+          {!loading && error && <div className="state-box"><h2 className="section-title">Impossible de charger les règles</h2><p className="section-desc">{error}</p></div>}
+          {!loading && !error && (
+            <div className="cenou-card">
+              <div className="grid">
+                <div>
+                  <h2 className="section-title">Calculer votre score</h2>
+                  <p className="section-desc">Le site ne déduit pas de seuil inventé. Il calcule le total de points à partir du barème officiel fourni et signale seulement si les conditions générales sont remplies.</p>
+                  <form onSubmit={handleSubmit}>
+                    <div className="field"><label>Nationalité malienne</label><div className="radio-list">{['oui','non'].map(value => <button type="button" key={value} className={`radio-pill${answers.nationalite === value ? ' active' : ''}`} onClick={() => updateField('nationalite', value)}>{value === 'oui' ? 'Oui' : 'Non'}</button>)}</div></div>
+                    <div className="field"><label>Étudiant régulier</label><div className="radio-list">{[{value:'oui',label:'Oui, institution publique / partenaire'},{value:'non',label:'Non'}].map(option => <button type="button" key={option.value} className={`radio-pill${answers.statutEtudiant === option.value ? ' active' : ''}`} onClick={() => updateField('statutEtudiant', option.value)}>{option.label}</button>)}</div></div>
+                    <div className="field"><label>Moyenne au baccalauréat</label><input type="number" min="0" max="20" step="0.01" value={answers.moyenneBac} onChange={event => updateField('moyenneBac', event.target.value)} placeholder="Ex : 12.75" /></div>
+                    <div className="field"><label>Durée des études au lycée</label><div className="radio-list">{['3','4','5'].map(value => <button type="button" key={value} className={`radio-pill${answers.dureeLycee === value ? ' active' : ''}`} onClick={() => updateField('dureeLycee', value)}>{value} ans</button>)}</div></div>
+                    <div className="field"><label>Genre</label><div className="radio-list">{[{value:'masculin',label:'Masculin'},{value:'feminin',label:'Féminin'}].map(option => <button type="button" key={option.value} className={`radio-pill${answers.genre === option.value ? ' active' : ''}`} onClick={() => updateField('genre', option.value)}>{option.label}</button>)}</div></div>
+                    <div className="field"><label>Situation sociale</label><div className="radio-list">{[{value:'non',label:'Non orphelin(e)'},{value:'oui',label:'Orphelin(e) de père ou de mère'}].map(option => <button type="button" key={option.value} className={`radio-pill${answers.orphelin === option.value ? ' active' : ''}`} onClick={() => updateField('orphelin', option.value)}>{option.label}</button>)}</div></div>
+                    <div className="field"><label>Série du baccalauréat</label><select value={answers.serieBac} onChange={event => updateField('serieBac', event.target.value)}><option value="">Sélectionner une série</option>{seriesExamples.map(item => <option key={item} value={item}>{item}</option>)}<option value="AUTRE_SERIE">Autre série</option></select></div>
+                    <div className="field"><label>Besoin d'aide sociale particulière</label><div className="radio-list">{[{value:'non',label:'Non'},{value:'oui',label:'Oui (handicap, maladie grave, centre d’accueil)'}].map(option => <button type="button" key={option.value} className={`radio-pill${answers.aideSociale === option.value ? ' active' : ''}`} onClick={() => updateField('aideSociale', option.value)}>{option.label}</button>)}</div></div>
+                    <button className="btn-submit" type="submit" disabled={!canCompute}>Calculer mon score</button>
+                    {submitted && <button className="btn-reset" type="button" onClick={resetForm}>Réinitialiser</button>}
+                  </form>
+                  {result && (
+                    <div className="result-box">
+                      <div className="result-title">Résultat du test</div>
+                      {result.isEligibleToApply ? (
+                        <>
+                          <div className="score-pill">Score calculé : {result.total} point(s)</div>
+                          <div className="result-text">Vous remplissez les <strong>conditions générales</strong> de dépôt et le site calcule un total de points à partir du barème fourni. Le document transmis ne donne pas les seuils chiffrés permettant d'affirmer automatiquement « bourse entière », « demi-bourse » ou « aucune bourse ».</div>
+                        </>
+                      ) : <div className="result-text">Vous ne remplissez pas les conditions générales minimales pour déposer une demande d'allocation CENOU : nationalité malienne et statut d'étudiant régulier.</div>}
+                      {!!result.breakdown.length && <div className="breakdown">{result.breakdown.map((item,index) => <div key={index} className="breakdown-item"><div className="breakdown-head"><div className="breakdown-label">{item.label}</div><div className="breakdown-points">+{item.points} pt(s)</div></div><div className="breakdown-value">{item.value}</div></div>)}</div>}
+                      {(answers.aideSociale === 'oui' || ambiguityRules.length > 0) && <div className="note-box">{answers.aideSociale === 'oui' && specialAidRules[0]?.condition && <div><strong>Aide sociale :</strong> {cleanText(specialAidRules[0].condition)}.</div>}{ambiguityRules.map(rule => <div key={rule.id} style={{ marginTop: 8 }}>{cleanText(rule.condition)}</div>)}</div>}
+                    </div>
+                  )}
                 </div>
-                <p className="q-label">{currentQ.label}</p>
-                {currentQ.hint && <p className="q-hint">💡 {currentQ.hint}</p>}
-                <div className="options-list">
-                  {currentQ.options.map(o => (
-                    <button key={o.val} className="option-btn" onClick={() => handleAnswer(o.val)}>
-                      {o.label}
-                    </button>
-                  ))}
+                <div>
+                  <div className="side-block"><h3>Conditions générales</h3><ul className="plain-list">{requiredConditions.map(rule => <li key={rule.id}>{cleanText(rule.condition)}</li>)}</ul></div>
+                  <div className="side-block"><h3>Barème et bonifications</h3><ul className="plain-list">{scoringRules.map(rule => <li key={rule.id}><strong>{cleanText(rule.critere)} :</strong> {cleanText(rule.condition)} → {cleanText(rule.points)} point(s)</li>)}{bonusRules.map(rule => <li key={rule.id}><strong>{cleanText(rule.critere)} :</strong> {cleanText(rule.condition)} → {cleanText(rule.points)} point(s)</li>)}</ul></div>
+                  <div className="side-block"><h3>Pièces à fournir</h3><ul className="plain-list">{documents.map(rule => <li key={rule.id}>{cleanText(rule.condition)}</li>)}{conditionalDocuments.map(rule => <li key={rule.id}>{cleanText(rule.condition)}</li>)}</ul></div>
+                  <div className="side-block"><h3>Procédure / sortie</h3><ul className="plain-list">{procedureRules.map(rule => <li key={rule.id}>{cleanText(rule.condition)}</li>)}{resultRules.map(rule => <li key={rule.id}>{cleanText(rule.condition)}</li>)}</ul></div>
                 </div>
-              </>
-            )}
-
-            {/* RESULT */}
-            {step > totalSteps && res && (
-              <>
-                <div className="result-box" style={{ background: res.color, borderColor: res.border }}>
-                  <div className="result-icon">{res.icon}</div>
-                  <div className="result-title" style={{ color: res.textColor }}>{res.title}</div>
-                  <div className="result-body" style={{ color: res.textColor }}>{res.body}</div>
-                </div>
-
-                {res.actions.includes('documents') && (
-                  <>
-                    <button className="docs-toggle" onClick={() => setShowDocs(!showDocs)}>
-                      {showDocs ? '▲ Masquer les documents requis' : '📄 Voir les documents à préparer'}
-                    </button>
-                    {showDocs && (
-                      <ul className="docs-list">
-                        {DOCUMENTS.map((d, i) => (
-                          <li key={i}><span>📌</span>{d}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </>
-                )}
-
-                {res.actions.includes('dossier') && (
-                  <a
-                    href="/guide#cenou"
-                    style={{
-                      display: 'block', marginTop: 12, padding: '12px 18px',
-                      background: 'var(--green-700)', color: 'white', borderRadius: 'var(--radius-md)',
-                      textAlign: 'center', textDecoration: 'none', fontSize: 14, fontWeight: 600
-                    }}
-                  >
-                    📋 Voir le guide CENOU complet →
-                  </a>
-                )}
-
-                <div className="disclaimer">
-                  ⚠️ Ce résultat est <strong>indicatif et non officiel</strong>. La décision finale appartient à la Commission CENOU. Nous vous encourageons à déposer votre dossier même en cas de doute.
-                </div>
-
-                <button className="btn-reset" onClick={reset}>← Refaire le test</button>
-              </>
-            )}
-          </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </>
