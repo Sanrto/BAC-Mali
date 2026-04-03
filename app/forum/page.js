@@ -1,415 +1,474 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
-import Link                                  from 'next/link'
-import { getSupabaseClient }                 from '../../lib/supabaseClient'
-import { useAuth }                           from '../contexts/AuthContext'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import Link from 'next/link'
+import { getSupabaseClient } from '../../lib/supabaseClient'
+import { useAuth } from '../contexts/AuthContext'
 
-const CATEGORIES = ['Toutes', 'Inscription', 'CENOU / Bourse', 'Orientation', 'Résultats BAC', 'Vie étudiante', 'Autre']
+/* ─────────────────────────────────────────
+   CONSTANTES
+───────────────────────────────────────── */
+const CATEGORIES = ['Toutes', 'Orientation', 'Cours', 'Examen', 'Université', 'Bourse', 'Conseils', 'Autres']
+const PAGE_SIZE  = 15
 
+const CAT_COLORS = {
+  Orientation: '#2563EB', Cours: '#7C3AED', Examen: '#DC2626',
+  Université: '#0891B2', Bourse: '#D97706', Conseils: '#059669', Autres: '#6B7280'
+}
+
+const BADGE_CFG = {
+  nouveau:    { label: 'Nouveau',    icon: '🌱', color: '#6B7280' },
+  actif:      { label: 'Actif',      icon: '⚡', color: '#2563EB' },
+  tres_actif: { label: 'Très Actif', icon: '🔥', color: '#D97706' },
+  expert:     { label: 'Expert',     icon: '🏆', color: '#059669' },
+  premium:    { label: 'Premium',    icon: '⭐', color: '#7C3AED' },
+}
+
+/* ─────────────────────────────────────────
+   UTILITAIRES
+───────────────────────────────────────── */
 function timeAgo(dateStr) {
   const diff = Date.now() - new Date(dateStr).getTime()
   const m = Math.floor(diff / 60000)
   if (m < 1)   return 'à l\'instant'
-  if (m < 60)  return `il y a ${m} min`
+  if (m < 60)  return `il y a ${m}min`
   const h = Math.floor(m / 60)
   if (h < 24)  return `il y a ${h}h`
   const d = Math.floor(h / 24)
-  if (d < 30)  return `il y a ${d}j`
-  return new Date(dateStr).toLocaleDateString('fr-FR')
+  return d < 30 ? `il y a ${d}j` : new Date(dateStr).toLocaleDateString('fr-FR')
 }
 
-/* ──────────── LISTE DES QUESTIONS ──────────── */
-function QuestionList({ onOpen }) {
-  const [questions, setQuestions] = useState([])
-  const [loading, setLoading]     = useState(true)
-  const [cat, setCat]             = useState('Toutes')
+function avatarUrl(username) {
+  return `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(username ?? 'U')}&backgroundColor=145a30&textColor=ffffff&fontSize=38`
+}
+
+/* ─────────────────────────────────────────
+   COMPOSANTS UI
+───────────────────────────────────────── */
+function BadgeChip({ badge }) {
+  const cfg = BADGE_CFG[badge] ?? BADGE_CFG.nouveau
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 3,
+      padding: '1px 7px', borderRadius: 100, fontSize: 10, fontWeight: 700,
+      background: cfg.color + '18', color: cfg.color,
+      border: `1px solid ${cfg.color}40`
+    }}>
+      {cfg.icon} {cfg.label}
+    </span>
+  )
+}
+
+function CatBadge({ cat }) {
+  const c = CAT_COLORS[cat] ?? '#6B7280'
+  return (
+    <span style={{
+      padding: '2px 9px', borderRadius: 100, fontSize: 11, fontWeight: 600,
+      background: c + '14', color: c, border: `1px solid ${c}28`
+    }}>{cat}</span>
+  )
+}
+
+/* ─────────────────────────────────────────
+   CARTE POST
+───────────────────────────────────────── */
+function PostCard({ post }) {
+  const { id, titre, body, categorie, votes_score, comments_count, created_at, is_resolved, username, avatar_url, badge } = post
+  const excerpt = body?.length > 130 ? body.slice(0, 130) + '…' : body
+  const scoreColor = votes_score > 0 ? 'var(--green-700)' : votes_score < 0 ? '#DC2626' : 'var(--ink-4)'
+
+  return (
+    <Link href={`/forum/${id}`} className="post-card-link">
+      <article className="post-card">
+        {/* Score */}
+        <div className="post-score-col">
+          <span className="score-num" style={{ color: scoreColor }}>{votes_score}</span>
+          <span className="score-label">votes</span>
+          <span className="comments-col">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+            </svg>
+            {comments_count ?? 0}
+          </span>
+        </div>
+
+        {/* Content */}
+        <div className="post-main">
+          <div className="post-tags">
+            <CatBadge cat={categorie} />
+            {is_resolved && (
+              <span className="resolved-tag">✅ Résolu</span>
+            )}
+          </div>
+          <h3 className="post-titre">{titre}</h3>
+          {excerpt && <p className="post-excerpt">{excerpt}</p>}
+          <div className="post-meta-row">
+            <span className="meta-author">
+              <img
+                src={avatar_url ?? avatarUrl(username)}
+                alt="" className="mini-avatar"
+              />
+              <strong>{username ?? 'Anonyme'}</strong>
+              {badge && <BadgeChip badge={badge} />}
+            </span>
+            <span className="meta-time">🕐 {timeAgo(created_at)}</span>
+          </div>
+        </div>
+      </article>
+    </Link>
+  )
+}
+
+/* ─────────────────────────────────────────
+   PAGE PRINCIPALE
+───────────────────────────────────────── */
+export default function ForumPage() {
+  const [posts, setPosts]     = useState([])
+  const [loading, setLoading] = useState(true)
+  const [hasMore, setHasMore] = useState(false)
+  const [offset, setOffset]   = useState(0)
+  const [cat, setCat]         = useState('Toutes')
+  const [sort, setSort]       = useState('recent')   // 'recent' | 'popular' | 'unanswered'
+  const [search, setSearch]   = useState('')
+  const [stats, setStats]     = useState({ posts: 0, members: 0 })
+  const { user, loading: authLoading } = useAuth()
   const supabase = getSupabaseClient()
 
-  const load = useCallback(async () => {
+  /* ── Chargement des posts ── */
+  const loadPosts = useCallback(async (reset = true) => {
     setLoading(true)
+    const start = reset ? 0 : offset
+
     let q = supabase
-      .from('forum_questions')
-      .select('id, titre, categorie, created_at, answer_count, is_resolved, profiles(username)')
-      .order('created_at', { ascending: false })
-      .limit(30)
+      .from('forum_posts_view')
+      .select('id, titre, body, categorie, votes_score, comments_count, is_resolved, created_at, username, avatar_url, badge')
+      .range(start, start + PAGE_SIZE - 1)
+
     if (cat !== 'Toutes') q = q.eq('categorie', cat)
-    const { data } = await q
-    setQuestions(data ?? [])
+    if (sort === 'unanswered') q = q.eq('comments_count', 0)
+    if (search.trim()) q = q.ilike('titre', `%${search.trim()}%`)
+
+    if (sort === 'popular') {
+      q = q.order('votes_score', { ascending: false }).order('created_at', { ascending: false })
+    } else {
+      q = q.order('created_at', { ascending: false })
+    }
+
+    const { data, error } = await q
+    if (!error) {
+      const rows = data ?? []
+      setPosts(prev => reset ? rows : [...prev, ...rows])
+      setHasMore(rows.length === PAGE_SIZE)
+      setOffset(reset ? PAGE_SIZE : start + PAGE_SIZE)
+    }
     setLoading(false)
-  }, [cat])
+  }, [cat, sort, search, offset])
 
-  useEffect(() => { load() }, [load])
+  /* ── Effets ── */
+  useEffect(() => { loadPosts(true) }, [cat, sort])
 
+  useEffect(() => {
+    const t = setTimeout(() => loadPosts(true), 380)
+    return () => clearTimeout(t)
+  }, [search])
+
+  useEffect(() => {
+    Promise.all([
+      supabase.from('forum_posts').select('id', { count: 'exact', head: true }),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }),
+    ]).then(([{ count: p }, { count: m }]) => {
+      setStats({ posts: p ?? 0, members: m ?? 0 })
+    })
+  }, [])
+
+  /* ─────────────────────────────────────── */
   return (
     <>
       <style>{`
-        .qlist-cats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
-        .qlist-cat {
-          padding: 5px 14px; border-radius: 100px; font-size: 12px; font-weight: 600;
+        /* ══ FORUM PAGE ══ */
+        .forum-wrap { min-height: 80vh; background: var(--paper); }
+
+        /* Hero */
+        .forum-hero {
+          background: linear-gradient(140deg, var(--green-900) 0%, var(--green-700) 55%, #1E8A4A 100%);
+          color: white; padding: 56px 24px 88px; text-align: center; position: relative; overflow: hidden;
+        }
+        .forum-hero::after {
+          content: '';
+          position: absolute; inset: 0; pointer-events: none;
+          background: url("data:image/svg+xml,%3Csvg width='40' height='40' viewBox='0 0 40 40' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23fff' fill-opacity='0.03' fill-rule='evenodd'%3E%3Cpath d='M0 40L40 0H20L0 20M40 40V20L20 40'/%3E%3C/g%3E%3C/svg%3E");
+        }
+        .hero-eyebrow { position: relative; font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--gold-400); margin-bottom: 10px; }
+        .hero-title { position: relative; font-family: var(--font-display); font-size: clamp(28px, 5vw, 48px); font-weight: 400; letter-spacing: -.02em; line-height: 1.1; margin-bottom: 10px; }
+        .hero-title em { font-style: italic; color: var(--gold-400); }
+        .hero-sub { position: relative; font-size: 15px; color: rgba(255,255,255,.65); max-width: 440px; margin: 0 auto 24px; line-height: 1.6; }
+        .hero-stats { position: relative; display: flex; gap: 32px; justify-content: center; }
+        .hstat { text-align: center; }
+        .hstat-n { font-family: var(--font-display); font-size: 26px; font-weight: 500; color: var(--gold-400); }
+        .hstat-l { font-size: 11px; color: rgba(255,255,255,.55); margin-top: 1px; }
+
+        /* Layout */
+        .forum-body {
+          max-width: 960px; margin: -44px auto 0; padding: 0 16px 72px;
+          display: grid; grid-template-columns: 1fr 256px; gap: 20px; align-items: start;
+        }
+        @media (max-width: 760px) {
+          .forum-body { grid-template-columns: 1fr; }
+          .f-sidebar { display: none; }
+        }
+
+        /* Controls */
+        .f-controls {
+          background: var(--white); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg);
+          padding: 16px 18px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 12px;
+          position: sticky; top: 12px; z-index: 10;
+        }
+        .ctrl-top { display: flex; gap: 10px; align-items: center; }
+        .f-search {
+          flex: 1; padding: 10px 14px 10px 38px; border-radius: var(--radius-md);
+          border: 1.5px solid var(--paper-2); background: var(--paper);
+          font-family: var(--font-body); font-size: 14px; color: var(--ink); outline: none;
+          transition: all .2s;
+        }
+        .f-search:focus { border-color: var(--green-500); background: var(--white); box-shadow: 0 0 0 3px rgba(46,154,92,.1); }
+        .f-search::placeholder { color: var(--ink-4); }
+        .search-wrap { position: relative; flex: 1; }
+        .search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--ink-4); font-size: 14px; pointer-events: none; }
+
+        .btn-new {
+          display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+          padding: 10px 18px; background: var(--green-700); color: white; border: none;
+          border-radius: var(--radius-md); font-family: var(--font-body); font-size: 13px;
+          font-weight: 600; cursor: pointer; transition: background .15s; text-decoration: none;
+        }
+        .btn-new:hover { background: var(--green-800); }
+        .btn-new.outline {
+          background: var(--paper); color: var(--ink-2); border: 1.5px solid var(--paper-2);
+        }
+        .btn-new.outline:hover { background: var(--paper-2); }
+
+        .cats-row { display: flex; gap: 6px; flex-wrap: wrap; }
+        .cat-pill {
+          padding: 4px 12px; border-radius: 100px; font-size: 12px; font-weight: 600;
           border: 1.5px solid var(--paper-2); background: var(--white); color: var(--ink-3);
           cursor: pointer; transition: all .15s; font-family: var(--font-body);
         }
-        .qlist-cat:hover  { border-color: var(--green-300); color: var(--green-700); }
-        .qlist-cat.active { background: var(--green-700); border-color: var(--green-700); color: white; }
-        .q-items { display: flex; flex-direction: column; gap: 10px; }
-        .q-item {
+        .cat-pill:hover  { border-color: var(--green-300); color: var(--green-700); }
+        .cat-pill.active { background: var(--green-700); border-color: var(--green-700); color: white; }
+
+        .sort-tabs { display: flex; gap: 2px; border-top: 1.5px solid var(--paper-2); padding-top: 10px; }
+        .sort-tab {
+          padding: 5px 12px; font-size: 12px; font-weight: 600; background: none; border: none;
+          color: var(--ink-4); cursor: pointer; font-family: var(--font-body);
+          border-radius: var(--radius-sm); transition: all .15s;
+        }
+        .sort-tab:hover  { color: var(--green-700); background: var(--green-50); }
+        .sort-tab.active { color: var(--green-700); background: var(--green-50); }
+
+        /* Post card */
+        .post-card-link { text-decoration: none; color: inherit; display: block; }
+        .post-card {
           background: var(--white); border-radius: var(--radius-lg); border: 1.5px solid var(--paper-2);
-          padding: 18px 20px; cursor: pointer; transition: border-color .15s, box-shadow .15s;
+          padding: 14px 18px; display: flex; gap: 16px; transition: all .15s;
+          margin-bottom: 8px; cursor: pointer;
         }
-        .q-item:hover { border-color: var(--green-300); box-shadow: var(--shadow-sm); }
-        .q-item-top { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
-        .q-cat-badge {
-          padding: 3px 10px; border-radius: 100px; font-size: 11px; font-weight: 600;
-          background: var(--green-50); color: var(--green-700); border: 1px solid var(--green-200);
-          white-space: nowrap; flex-shrink: 0;
+        .post-card:hover { border-color: var(--green-300); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+
+        .post-score-col {
+          display: flex; flex-direction: column; align-items: center; gap: 2px;
+          min-width: 40px; padding-top: 2px;
         }
-        .q-cat-badge.resolved { background: var(--gold-50); color: var(--gold-700); border-color: var(--gold-100); }
-        .q-titre { font-size: 15px; font-weight: 600; color: var(--ink); line-height: 1.3; flex: 1; }
-        .q-meta { display: flex; gap: 14px; font-size: 12px; color: var(--ink-4); flex-wrap: wrap; }
-        .q-meta strong { color: var(--ink-3); }
-        .loading-msg { text-align: center; padding: 40px; color: var(--ink-3); font-size: 14px; }
-        .empty-msg { text-align: center; padding: 40px 20px; color: var(--ink-3); }
-        .empty-msg h3 { font-family: var(--font-display); font-size: 18px; color: var(--ink); margin-bottom: 6px; }
-      `}</style>
-      <div className="qlist-cats">
-        {CATEGORIES.map(c => (
-          <button key={c} className={`qlist-cat${cat === c ? ' active' : ''}`} onClick={() => setCat(c)}>{c}</button>
-        ))}
-      </div>
-      {loading ? (
-        <div className="loading-msg">Chargement des questions…</div>
-      ) : questions.length === 0 ? (
-        <div className="empty-msg">
-          <h3>Aucune question pour l'instant</h3>
-          <p>Soyez le(la) premier(ère) à poser une question !</p>
-        </div>
-      ) : (
-        <div className="q-items">
-          {questions.map(q => (
-            <div key={q.id} className="q-item" onClick={() => onOpen(q)}>
-              <div className="q-item-top">
-                <span className={`q-cat-badge${q.is_resolved ? ' resolved' : ''}`}>
-                  {q.is_resolved ? '✅ Résolu' : q.categorie}
-                </span>
-                <span className="q-titre">{q.titre}</span>
-              </div>
-              <div className="q-meta">
-                <span>👤 <strong>{q.profiles?.username ?? 'Anonyme'}</strong></span>
-                <span>💬 <strong>{q.answer_count ?? 0}</strong> réponse{q.answer_count !== 1 ? 's' : ''}</span>
-                <span>🕐 {timeAgo(q.created_at)}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </>
-  )
-}
+        .score-num { font-family: var(--font-display); font-size: 20px; font-weight: 500; line-height: 1; }
+        .score-label { font-size: 9px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-4); }
+        .comments-col { display: flex; align-items: center; gap: 3px; font-size: 12px; color: var(--ink-4); margin-top: 6px; }
 
-/* ──────────── DÉTAIL QUESTION + RÉPONSES ──────────── */
-function QuestionDetail({ question, onBack, user }) {
-  const [answers, setAnswers] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [body, setBody]       = useState('')
-  const [posting, setPosting] = useState(false)
-  const [postMsg, setPostMsg] = useState('')
-  const supabase = getSupabaseClient()
+        .post-main { flex: 1; min-width: 0; }
+        .post-tags { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 7px; }
+        .resolved-tag {
+          padding: 1px 8px; border-radius: 100px; font-size: 11px; font-weight: 600;
+          background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0;
+        }
+        .post-titre { font-size: 15px; font-weight: 600; color: var(--ink); line-height: 1.35; margin-bottom: 5px; }
+        .post-excerpt { font-size: 13px; color: var(--ink-3); line-height: 1.55; margin-bottom: 10px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
-  useEffect(() => {
-    supabase
-      .from('forum_answers')
-      .select('id, body, created_at, likes_count, is_best, profiles(username)')
-      .eq('question_id', question.id)
-      .order('is_best', { ascending: false })
-      .order('likes_count', { ascending: false })
-      .order('created_at', { ascending: true })
-      .then(({ data }) => { setAnswers(data ?? []); setLoading(false) })
-  }, [question.id])
+        .post-meta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+        .meta-author { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-3); }
+        .meta-author strong { color: var(--ink-2); font-weight: 600; }
+        .mini-avatar { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; border: 1px solid var(--paper-2); }
+        .meta-time { font-size: 12px; color: var(--ink-4); }
 
-  async function handleAnswer(e) {
-    e.preventDefault()
-    if (!body.trim()) return
-    setPosting(true); setPostMsg('')
-    const { error } = await supabase.from('forum_answers').insert({
-      question_id: question.id,
-      body: body.trim(),
-      user_id: user.id,
-    })
-    if (error) { setPostMsg('Erreur : ' + error.message) }
-    else {
-      setBody('')
-      // Reload answers + increment count
-      const { data } = await supabase
-        .from('forum_answers')
-        .select('id, body, created_at, likes_count, is_best, profiles(username)')
-        .eq('question_id', question.id)
-        .order('is_best', { ascending: false })
-        .order('likes_count', { ascending: false })
-        .order('created_at', { ascending: true })
-      setAnswers(data ?? [])
-      await supabase.rpc('increment_answer_count', { qid: question.id })
-    }
-    setPosting(false)
-  }
+        /* Skeleton */
+        .skel-list { display: flex; flex-direction: column; gap: 8px; }
+        .skel-card { height: 96px; border-radius: var(--radius-lg); background: linear-gradient(90deg, var(--paper) 25%, var(--paper-2) 50%, var(--paper) 75%); background-size: 200% 100%; animation: shimmer 1.4s ease infinite; }
 
-  async function handleLike(answerId) {
-    if (!user) return
-    const { error } = await supabase.rpc('toggle_answer_like', { aid: answerId, uid: user.id })
-    if (!error) {
-      const { data } = await supabase
-        .from('forum_answers')
-        .select('id, body, created_at, likes_count, is_best, profiles(username)')
-        .eq('question_id', question.id)
-        .order('is_best', { ascending: false })
-        .order('likes_count', { ascending: false })
-        .order('created_at', { ascending: true })
-      setAnswers(data ?? [])
-    }
-  }
+        /* Load more */
+        .btn-load-more {
+          width: 100%; padding: 13px; background: var(--white); border: 1.5px solid var(--paper-2);
+          border-radius: var(--radius-lg); font-family: var(--font-body); font-size: 14px;
+          color: var(--ink-3); cursor: pointer; transition: all .15s; margin-top: 4px;
+        }
+        .btn-load-more:hover { border-color: var(--green-300); color: var(--green-700); }
 
-  return (
-    <>
-      <style>{`
-        .detail-back { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 16px; font-size: 13px; color: var(--ink-3); background: none; border: none; cursor: pointer; padding: 0; font-family: var(--font-body); transition: color .15s; }
-        .detail-back:hover { color: var(--green-700); }
-        .detail-card { background: var(--white); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg); padding: 28px; margin-bottom: 16px; }
-        .detail-cat-badge { padding: 3px 10px; border-radius: 100px; font-size: 11px; font-weight: 600; background: var(--green-50); color: var(--green-700); border: 1px solid var(--green-200); display: inline-block; margin-bottom: 12px; }
-        .detail-titre { font-family: var(--font-display); font-size: clamp(18px, 3vw, 24px); font-weight: 500; color: var(--ink); margin-bottom: 14px; line-height: 1.3; }
-        .detail-body { font-size: 14px; color: var(--ink-2); line-height: 1.8; white-space: pre-wrap; }
-        .detail-meta { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--paper-2); font-size: 12px; color: var(--ink-4); display: flex; gap: 16px; }
+        /* Empty */
+        .f-empty { text-align: center; padding: 52px 20px; }
+        .f-empty h3 { font-family: var(--font-display); font-size: 20px; color: var(--ink); margin-bottom: 8px; }
+        .f-empty p { font-size: 14px; color: var(--ink-3); }
 
-        .answers-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-3); margin: 20px 0 12px; }
-        .answer-card { background: var(--white); border-radius: var(--radius-lg); border: 1.5px solid var(--paper-2); padding: 18px 20px; margin-bottom: 10px; transition: border-color .15s; }
-        .answer-card.best { border-color: var(--green-300); background: var(--green-50); }
-        .best-label { font-size: 11px; font-weight: 700; color: var(--green-700); letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 8px; display: flex; align-items: center; gap: 5px; }
-        .answer-body { font-size: 14px; color: var(--ink-2); line-height: 1.7; white-space: pre-wrap; margin-bottom: 12px; }
-        .answer-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-        .answer-meta { font-size: 12px; color: var(--ink-4); display: flex; gap: 10px; }
-        .like-btn { display: flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 100px; font-size: 12px; font-weight: 600; border: 1.5px solid var(--paper-2); background: var(--paper); color: var(--ink-2); cursor: pointer; transition: all .15s; font-family: var(--font-body); }
-        .like-btn:hover { border-color: var(--green-400); color: var(--green-700); background: var(--green-50); }
-
-        .answer-form-card { background: var(--white); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg); padding: 24px; }
-        .answer-form-title { font-size: 15px; font-weight: 600; color: var(--ink); margin-bottom: 14px; }
-        .answer-textarea { width: 100%; padding: 12px 14px; font-family: var(--font-body); font-size: 14px; color: var(--ink); background: var(--paper); border: 1.5px solid var(--paper-2); border-radius: var(--radius-md); outline: none; resize: vertical; min-height: 100px; transition: border-color .2s; }
-        .answer-textarea:focus { border-color: var(--green-500); box-shadow: 0 0 0 3px rgba(46,154,92,0.12); background: var(--white); }
-        .btn-answer { margin-top: 10px; padding: 12px 24px; background: var(--green-700); color: white; border: none; border-radius: var(--radius-md); font-family: var(--font-body); font-size: 14px; font-weight: 600; cursor: pointer; transition: background .15s; }
-        .btn-answer:hover:not(:disabled) { background: var(--green-800); }
-        .btn-answer:disabled { opacity: 0.6; cursor: not-allowed; }
-        .auth-prompt { padding: 16px 20px; background: var(--gold-50); border: 1px solid var(--gold-100); border-radius: var(--radius-md); font-size: 14px; color: var(--gold-700); }
-        .auth-prompt a { color: var(--green-700); font-weight: 600; text-decoration: none; }
-        .auth-prompt a:hover { text-decoration: underline; }
-        .post-err { font-size: 13px; color: #991B1B; margin-top: 8px; }
+        /* Sidebar */
+        .f-sidebar { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 12px; }
+        .sb-card {
+          background: var(--white); border-radius: var(--radius-lg); border: 1.5px solid var(--paper-2);
+          padding: 18px 20px;
+        }
+        .sb-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--ink-3); margin-bottom: 14px; }
+        .sb-rule { font-size: 13px; color: var(--ink-2); padding: 7px 0; border-bottom: 1px solid var(--paper-2); display: flex; gap: 8px; }
+        .sb-rule:last-child { border-bottom: none; padding-bottom: 0; }
+        .sb-badge-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; font-size: 13px; color: var(--ink-2); }
+        .sb-badge-row:not(:last-child) { border-bottom: 1px solid var(--paper-2); }
       `}</style>
 
-      <button className="detail-back" onClick={onBack}>← Retour aux questions</button>
-
-      <div className="detail-card">
-        <span className="detail-cat-badge">{question.categorie}</span>
-        <h2 className="detail-titre">{question.titre}</h2>
-        <div className="detail-body">{question.body ?? ''}</div>
-        <div className="detail-meta">
-          <span>👤 {question.profiles?.username ?? 'Anonyme'}</span>
-          <span>🕐 {timeAgo(question.created_at)}</span>
-        </div>
-      </div>
-
-      <div className="answers-title">
-        {answers.length} Réponse{answers.length !== 1 ? 's' : ''}
-      </div>
-
-      {loading ? (
-        <div style={{ color: 'var(--ink-3)', fontSize: 14, padding: '20px 0' }}>Chargement…</div>
-      ) : (
-        answers.map(a => (
-          <div key={a.id} className={`answer-card${a.is_best ? ' best' : ''}`}>
-            {a.is_best && <div className="best-label">✅ Meilleure réponse</div>}
-            <div className="answer-body">{a.body}</div>
-            <div className="answer-footer">
-              <div className="answer-meta">
-                <span>👤 {a.profiles?.username ?? 'Anonyme'}</span>
-                <span>🕐 {timeAgo(a.created_at)}</span>
-              </div>
-              <button className="like-btn" onClick={() => handleLike(a.id)} disabled={!user}>
-                👍 {a.likes_count ?? 0}
-              </button>
-            </div>
-          </div>
-        ))
-      )}
-
-      <div className="answer-form-card" style={{ marginTop: 16 }}>
-        {user ? (
-          <>
-            <div className="answer-form-title">💬 Votre réponse</div>
-            <form onSubmit={handleAnswer}>
-              <textarea
-                className="answer-textarea"
-                placeholder="Partagez votre expérience ou votre conseil…"
-                value={body}
-                onChange={e => setBody(e.target.value)}
-                required
-              />
-              {postMsg && <div className="post-err">{postMsg}</div>}
-              <button className="btn-answer" type="submit" disabled={posting || !body.trim()}>
-                {posting ? 'Publication…' : 'Publier ma réponse'}
-              </button>
-            </form>
-          </>
-        ) : (
-          <div className="auth-prompt">
-            <Link href="/compte">Connectez-vous</Link> ou <Link href="/compte">créez un compte</Link> pour répondre à cette question.
-          </div>
-        )}
-      </div>
-    </>
-  )
-}
-
-/* ──────────── POSER UNE QUESTION ──────────── */
-function AskQuestion({ user, onDone }) {
-  const [titre, setTitre]     = useState('')
-  const [body, setBody]       = useState('')
-  const [cat, setCat]         = useState('')
-  const [loading, setLoading] = useState(false)
-  const [err, setErr]         = useState('')
-  const supabase = getSupabaseClient()
-
-  async function handleSubmit(e) {
-    e.preventDefault()
-    if (!cat) { setErr('Veuillez choisir une catégorie.'); return }
-    setLoading(true); setErr('')
-    const { error } = await supabase.from('forum_questions').insert({
-      titre: titre.trim(), body: body.trim(), categorie: cat, user_id: user.id,
-    })
-    if (error) { setErr('Erreur : ' + error.message) }
-    else { onDone() }
-    setLoading(false)
-  }
-
-  return (
-    <>
-      <style>{`
-        .ask-title { font-family: var(--font-display); font-size: 22px; font-weight: 500; color: var(--ink); margin-bottom: 20px; }
-        .ask-card { background: var(--white); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg); padding: 28px; }
-        .af-label { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
-        .af-field { margin-bottom: 18px; }
-        .af-input { width: 100%; padding: 12px 14px; font-family: var(--font-body); font-size: 15px; color: var(--ink); background: var(--paper); border: 1.5px solid var(--paper-2); border-radius: var(--radius-md); outline: none; transition: border-color .2s; }
-        .af-input:focus { border-color: var(--green-500); box-shadow: 0 0 0 3px rgba(46,154,92,0.12); background: var(--white); }
-        .af-select { appearance: none; }
-        .af-textarea { resize: vertical; min-height: 120px; }
-        .btn-post { padding: 14px 28px; background: var(--green-700); color: white; border: none; border-radius: var(--radius-md); font-family: var(--font-body); font-size: 15px; font-weight: 600; cursor: pointer; transition: background .15s; }
-        .btn-post:hover:not(:disabled) { background: var(--green-800); }
-        .btn-post:disabled { opacity: 0.6; cursor: not-allowed; }
-        .btn-cancel { padding: 14px 20px; background: var(--paper); color: var(--ink-2); border: 1.5px solid var(--paper-2); border-radius: var(--radius-md); font-family: var(--font-body); font-size: 15px; cursor: pointer; margin-left: 10px; }
-        .post-err { font-size: 13px; color: #991B1B; margin-bottom: 12px; }
-      `}</style>
-      <h2 className="ask-title">Poser une question</h2>
-      <div className="ask-card">
-        <form onSubmit={handleSubmit}>
-          <div className="af-field">
-            <div className="af-label">Catégorie</div>
-            <select className="af-input af-select" value={cat} onChange={e => setCat(e.target.value)} required>
-              <option value="">Choisir une catégorie…</option>
-              {CATEGORIES.filter(c => c !== 'Toutes').map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-          <div className="af-field">
-            <div className="af-label">Titre de la question</div>
-            <input className="af-input" type="text" placeholder="Ex : Comment demander une bourse CENOU ?" value={titre} onChange={e => setTitre(e.target.value)} required maxLength={200} />
-          </div>
-          <div className="af-field">
-            <div className="af-label">Détails (optionnel)</div>
-            <textarea className="af-input af-textarea" placeholder="Donnez plus de contexte à votre question…" value={body} onChange={e => setBody(e.target.value)} maxLength={2000} />
-          </div>
-          {err && <div className="post-err">{err}</div>}
-          <div>
-            <button className="btn-post" type="submit" disabled={loading}>{loading ? 'Publication…' : 'Publier la question'}</button>
-            <button className="btn-cancel" type="button" onClick={onDone}>Annuler</button>
-          </div>
-        </form>
-      </div>
-    </>
-  )
-}
-
-/* ──────────── PAGE PRINCIPALE ──────────── */
-export default function ForumPage() {
-  const [view, setView]         = useState('list')   // 'list' | 'detail' | 'ask'
-  const [activeQ, setActiveQ]   = useState(null)
-  const { user, loading }       = useAuth()
-
-  function openQuestion(q) { setActiveQ(q); setView('detail') }
-  function backToList()    { setActiveQ(null); setView('list') }
-
-  return (
-    <>
-      <style>{`
-        .forum-page { min-height: 80vh; display: flex; flex-direction: column; }
-        .forum-hero {
-          background: var(--green-800); color: white;
-          padding: 48px 24px 72px; text-align: center;
-        }
-        .forum-eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold-400); margin-bottom: 12px; }
-        .forum-title { font-family: var(--font-display); font-size: clamp(26px, 4vw, 42px); font-weight: 400; line-height: 1.15; letter-spacing: -0.02em; margin-bottom: 12px; }
-        .forum-title em { font-style: italic; color: var(--gold-400); }
-        .forum-sub { font-size: 15px; color: rgba(255,255,255,0.65); max-width: 420px; margin: 0 auto; }
-
-        .forum-body {
-          flex: 1; display: flex; flex-direction: column; align-items: center;
-          padding: 0 16px 56px; margin-top: -40px;
-        }
-        .forum-inner { width: 100%; max-width: 680px; }
-        .forum-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; animation: fadeUp .4s ease both; }
-        .forum-count { font-size: 13px; color: var(--ink-3); }
-        .btn-ask { padding: 10px 20px; background: var(--green-700); color: white; border: none; border-radius: var(--radius-md); font-family: var(--font-body); font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s; text-decoration: none; display: inline-block; }
-        .btn-ask:hover { background: var(--green-800); }
-        .btn-ask-login { background: var(--paper); color: var(--ink-2); border: 1.5px solid var(--paper-2); }
-        .btn-ask-login:hover { background: var(--paper-2); }
-
-        @media (max-width: 480px) {
-          .forum-hero { padding: 36px 20px 64px; }
-        }
-      `}</style>
-
-      <div className="forum-page">
+      <div className="forum-wrap">
+        {/* ── Hero ── */}
         <section className="forum-hero">
-          <p className="forum-eyebrow">💬 Communauté étudiante</p>
-          <h1 className="forum-title">Forum <em>Q&R</em></h1>
-          <p className="forum-sub">Posez vos questions, partagez vos expériences avec d'autres étudiants maliens.</p>
+          <p className="hero-eyebrow">🎓 Communauté Étudiante</p>
+          <h1 className="hero-title">Forum <em>Entraide</em></h1>
+          <p className="hero-sub">Pose tes questions, partage ton expérience avec d'autres étudiants maliens.</p>
+          <div className="hero-stats">
+            <div className="hstat">
+              <div className="hstat-n">{stats.posts.toLocaleString('fr-FR')}</div>
+              <div className="hstat-l">discussions</div>
+            </div>
+            <div className="hstat">
+              <div className="hstat-n">{stats.members.toLocaleString('fr-FR')}</div>
+              <div className="hstat-l">membres</div>
+            </div>
+          </div>
         </section>
 
+        {/* ── Body ── */}
         <div className="forum-body">
-          <div className="forum-inner">
-
-            {/* LIST */}
-            {view === 'list' && (
-              <>
-                <div className="forum-top">
-                  <span className="forum-count">Questions des étudiants</span>
-                  {!loading && (
-                    user ? (
-                      <button className="btn-ask" onClick={() => setView('ask')}>+ Poser une question</button>
-                    ) : (
-                      <Link href="/compte" className="btn-ask btn-ask-login">Connexion pour poster</Link>
-                    )
-                  )}
+          {/* ── Colonne principale ── */}
+          <div>
+            {/* Controls */}
+            <div className="f-controls">
+              <div className="ctrl-top">
+                <div className="search-wrap">
+                  <span className="search-icon">🔍</span>
+                  <input
+                    className="f-search"
+                    type="text"
+                    placeholder="Rechercher une question…"
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                  />
                 </div>
-                <QuestionList onOpen={openQuestion} />
+                {!authLoading && (
+                  user
+                    ? <Link href="/forum/nouveau" className="btn-new">+ Poster</Link>
+                    : <Link href="/compte" className="btn-new outline">Se connecter</Link>
+                )}
+              </div>
+
+              <div className="cats-row">
+                {CATEGORIES.map(c => (
+                  <button
+                    key={c}
+                    className={`cat-pill${cat === c ? ' active' : ''}`}
+                    onClick={() => setCat(c)}
+                  >{c}</button>
+                ))}
+              </div>
+
+              <div className="sort-tabs">
+                {[
+                  { key: 'recent',     label: '🕐 Récents' },
+                  { key: 'popular',    label: '🔥 Populaires' },
+                  { key: 'unanswered', label: '❓ Sans réponse' },
+                ].map(s => (
+                  <button
+                    key={s.key}
+                    className={`sort-tab${sort === s.key ? ' active' : ''}`}
+                    onClick={() => setSort(s.key)}
+                  >{s.label}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Posts */}
+            {loading && posts.length === 0 ? (
+              <div className="skel-list">
+                {[1, 2, 3, 4, 5].map(i => <div key={i} className="skel-card" />)}
+              </div>
+            ) : posts.length === 0 ? (
+              <div className="f-empty">
+                <h3>Aucune discussion trouvée</h3>
+                <p>
+                  {search
+                    ? `Aucun résultat pour « ${search} »`
+                    : 'Sois le premier à lancer une discussion !'}
+                </p>
+              </div>
+            ) : (
+              <>
+                {posts.map(p => <PostCard key={p.id} post={p} />)}
+                {hasMore && (
+                  <button
+                    className="btn-load-more"
+                    onClick={() => loadPosts(false)}
+                    disabled={loading}
+                  >
+                    {loading ? 'Chargement…' : '↓ Charger plus de discussions'}
+                  </button>
+                )}
               </>
             )}
-
-            {/* DETAIL */}
-            {view === 'detail' && activeQ && (
-              <QuestionDetail question={activeQ} onBack={backToList} user={user} />
-            )}
-
-            {/* ASK */}
-            {view === 'ask' && user && (
-              <AskQuestion user={user} onDone={() => setView('list')} />
-            )}
-
           </div>
+
+          {/* ── Sidebar ── */}
+          <aside className="f-sidebar">
+            {/* CTA */}
+            <div className="sb-card" style={{ background: 'linear-gradient(135deg, var(--green-800), var(--green-700))', borderColor: 'var(--green-600)' }}>
+              <div className="sb-title" style={{ color: 'rgba(255,255,255,.55)' }}>🚀 Rejoins la communauté</div>
+              <p style={{ fontSize: 13, color: 'rgba(255,255,255,.8)', marginBottom: 14, lineHeight: 1.65 }}>
+                Aide les autres, gagne de l'expérience et monte en grade d'Expert.
+              </p>
+              {user
+                ? <div style={{ fontSize: 13, color: 'var(--gold-400)', fontWeight: 700 }}>✅ Tu es connecté(e)</div>
+                : <Link href="/compte" style={{ display: 'block', textAlign: 'center', padding: '10px', background: 'var(--gold-400)', color: 'var(--green-900)', borderRadius: 'var(--radius-md)', fontSize: 13, fontWeight: 700, textDecoration: 'none' }}>Créer un compte →</Link>
+              }
+            </div>
+
+            {/* Règles */}
+            <div className="sb-card">
+              <div className="sb-title">📋 Règles du forum</div>
+              {[
+                ['🤝', 'Soyez respectueux'],
+                ['🚫', 'Pas de spam'],
+                ['🗂️', 'Bonne catégorie'],
+                ['✅', 'Marquer résolu'],
+                ['🔍', 'Chercher avant de poster'],
+              ].map(([icon, text]) => (
+                <div key={text} className="sb-rule"><span>{icon}</span><span>{text}</span></div>
+              ))}
+            </div>
+
+            {/* Grades */}
+            <div className="sb-card">
+              <div className="sb-title">🏅 Grades & Réputation</div>
+              {Object.entries(BADGE_CFG).map(([key, cfg]) => (
+                <div key={key} className="sb-badge-row">
+                  <span>{cfg.icon} <span style={{ fontWeight: 600, color: cfg.color }}>{cfg.label}</span></span>
+                  <span style={{ fontSize: 11, color: 'var(--ink-4)' }}>
+                    {key === 'nouveau' ? '0 pts'
+                     : key === 'actif' ? '50 pts'
+                     : key === 'tres_actif' ? '200 pts'
+                     : key === 'expert' ? '500 pts'
+                     : '✨'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </aside>
         </div>
       </div>
     </>
