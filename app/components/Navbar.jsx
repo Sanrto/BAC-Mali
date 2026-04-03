@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAuth } from '../contexts/AuthContext'
 import { getSupabaseClient } from '../../lib/supabaseClient'
+import { buildDisplayName } from '../../lib/profile-utils'
 
 const LINKS = [
   { href: '/',            label: 'Résultats BAC',  icon: '🎓' },
@@ -15,16 +16,16 @@ const LINKS = [
 ]
 
 export default function Navbar() {
-  const [open, setOpen]   = useState(false)
-  const pathname          = usePathname()
-  const { user, loading } = useAuth()
+  const [open, setOpen] = useState(false)
+  const pathname = usePathname()
+  const { user, profile, loading } = useAuth()
 
   async function signOut() {
     await getSupabaseClient().auth.signOut()
     setOpen(false)
   }
 
-  const username = user?.email?.split('@')[0] ?? ''
+  const displayName = buildDisplayName(profile, user)
 
   return (
     <>
@@ -69,6 +70,14 @@ export default function Navbar() {
         }
         .btn-login:hover { background: rgba(255,255,255,0.2); }
         .nav-user { display: flex; align-items: center; gap: 8px; }
+        .nav-user-link {
+          display: inline-flex; align-items: center; gap: 8px; text-decoration: none;
+          color: rgba(255,255,255,0.88);
+        }
+        .premium-pill {
+          padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700;
+          background: rgba(255,255,255,0.14); color: #FDE68A; border: 1px solid rgba(253,230,138,0.32);
+        }
         .nav-username { font-size: 13px; color: rgba(255,255,255,0.8); }
         .btn-logout {
           padding: 5px 11px; border-radius: 7px; font-size: 12px;
@@ -136,7 +145,10 @@ export default function Navbar() {
           {!loading && (
             user ? (
               <div className="nav-user">
-                <span className="nav-username">👤 {username}</span>
+                <Link href="/profil" className="nav-user-link">
+                  <span className="nav-username">👤 {displayName}</span>
+                  {profile?.is_premium && <span className="premium-pill">Premium</span>}
+                </Link>
                 <button className="btn-logout" onClick={signOut}>Déco.</button>
               </div>
             ) : (
@@ -165,6 +177,10 @@ export default function Navbar() {
         {!loading && (
           user ? (
             <>
+              <Link href="/profil" className="mobile-link" onClick={() => setOpen(false)}>
+                <span>👤</span>{displayName}
+                {profile?.is_premium && <span className="premium-pill">Premium</span>}
+              </Link>
               <span style={{ padding: '6px 14px', fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>
                 {user.email}
               </span>
