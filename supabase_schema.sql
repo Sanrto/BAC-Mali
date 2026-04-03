@@ -177,3 +177,68 @@ $$;
 -- VÉRIFICATION : exécutez cette requête pour tester
 -- SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';
 -- ================================================================
+
+
+-- ----------------------------------------------------------------
+-- 7. TABLES DE CONTENU (orientation, règles CENOU, procédures)
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.orientation (
+  id                    BIGINT PRIMARY KEY,
+  serie_bac             TEXT,
+  etablissement         TEXT,
+  structure             TEXT,
+  filiere               TEXT,
+  type_diplome          TEXT,
+  conditions            TEXT,
+  mode_acces            TEXT,
+  age_max               INTEGER,
+  duree                 TEXT,
+  prerequis             TEXT,
+  description           TEXT,
+  debouches             TEXT,
+  frais_inscription     NUMERIC,
+  frais_candidature     NUMERIC,
+  frais_carte_etudiant  NUMERIC,
+  frais_pedagogiques    NUMERIC,
+  autres_frais          TEXT,
+  source_document       TEXT,
+  source_pages          TEXT,
+  source_note           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_orientation_serie_bac ON public.orientation(serie_bac);
+CREATE INDEX IF NOT EXISTS idx_orientation_etablissement ON public.orientation(etablissement);
+ALTER TABLE public.orientation ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Orientation lisible par tous" ON public.orientation;
+CREATE POLICY "Orientation lisible par tous" ON public.orientation FOR SELECT USING (true);
+
+CREATE TABLE IF NOT EXISTS public.cenou_rules (
+  id               BIGINT PRIMARY KEY,
+  categorie        TEXT,
+  critere          TEXT,
+  condition        TEXT,
+  impact           TEXT,
+  points           NUMERIC,
+  source_document  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cenou_rules_categorie ON public.cenou_rules(categorie);
+CREATE INDEX IF NOT EXISTS idx_cenou_rules_critere ON public.cenou_rules(critere);
+ALTER TABLE public.cenou_rules ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Règles CENOU lisibles par tous" ON public.cenou_rules;
+CREATE POLICY "Règles CENOU lisibles par tous" ON public.cenou_rules FOR SELECT USING (true);
+
+CREATE TABLE IF NOT EXISTS public.procedures (
+  id               BIGINT PRIMARY KEY,
+  type             TEXT,
+  canal            TEXT,
+  titre            TEXT,
+  etapes           TEXT,
+  documents        TEXT,
+  conditions       TEXT,
+  resultat         TEXT,
+  source_document  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_procedures_type ON public.procedures(type);
+CREATE INDEX IF NOT EXISTS idx_procedures_canal ON public.procedures(canal);
+ALTER TABLE public.procedures ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Procédures lisibles par tous" ON public.procedures;
+CREATE POLICY "Procédures lisibles par tous" ON public.procedures FOR SELECT USING (true);
