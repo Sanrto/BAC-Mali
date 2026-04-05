@@ -21,7 +21,7 @@ export default function ProfilPage() {
   const [message, setMessage] = useState({ type: '', text: '' })
 
   useEffect(() => {
-    if (!authLoading && !user) router.replace('/compte')
+    if (!authLoading && !user) router.replace('/login')
   }, [authLoading, user, router])
 
   useEffect(() => {

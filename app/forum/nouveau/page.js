@@ -1,287 +1,312 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { getSupabaseClient } from '../../../lib/supabaseClient'
+import {
+  getSupabaseBrowserConfigError,
+  getSupabaseClient,
+  isSupabaseConfigured,
+} from '../../../lib/supabaseClient'
+import { createForumPost, FORUM_CATEGORIES } from '../../../lib/forum-client'
 import { useAuth } from '../../contexts/AuthContext'
 
-const CATEGORIES = ['Orientation', 'Cours', 'Examen', 'Université', 'Bourse', 'Conseils', 'Autres']
-
-const CAT_DESCRIPTIONS = {
-  Orientation: 'Filières, débouchés, choix d\'études',
-  Cours:       'Questions sur les matières et programmes',
-  Examen:      'Préparation, résultats, rattrapages',
-  Université:  'Inscription, campus, administration',
-  Bourse:      'CENOU, bourses étrangères, aides',
-  Conseils:    'Conseils de vie étudiante',
-  Autres:      'Tout ce qui ne rentre pas ailleurs',
-}
+const FORM_CATEGORIES = FORUM_CATEGORIES.filter((item) => item !== 'Toutes')
 
 export default function NouveauPostPage() {
-  const router        = useRouter()
+  const router = useRouter()
+  const supabase = getSupabaseClient()
+  const forumReady = isSupabaseConfigured()
   const { user, loading: authLoading } = useAuth()
-  const supabase      = getSupabaseClient()
 
-  const [titre, setTitre]   = useState('')
-  const [body, setBody]     = useState('')
-  const [cat, setCat]       = useState('')
+  const [titre, setTitre] = useState('')
+  const [body, setBody] = useState('')
+  const [categorie, setCategorie] = useState('Orientation')
   const [loading, setLoading] = useState(false)
-  const [err, setErr]       = useState('')
-  const [step, setStep]     = useState(1) // 1 = cat, 2 = form
+  const [error, setError] = useState('')
 
-  // Redirect si non connecté
   useEffect(() => {
-    if (!authLoading && !user) router.replace('/compte')
-  }, [user, authLoading])
+    if (!authLoading && !user) {
+      router.replace('/login')
+    }
+  }, [authLoading, router, user])
 
-  async function handleSubmit(e) {
-    e.preventDefault()
-    setErr('')
-    if (!cat)           { setErr('Choisissez une catégorie.'); return }
-    if (titre.length < 10) { setErr('Le titre doit faire au moins 10 caractères.'); return }
-    if (body.length < 20)  { setErr('La description doit faire au moins 20 caractères.'); return }
+  async function handleSubmit(event) {
+    event.preventDefault()
+
+    if (!supabase) {
+      setError(getSupabaseBrowserConfigError())
+      return
+    }
 
     setLoading(true)
+    setError('')
 
-    // Anti-spam
-    const { data: canPost } = await supabase.rpc('can_create_post')
-    if (!canPost) {
-      setErr('Vous avez déjà posté récemment. Attendez 2 minutes.')
-      setLoading(false); return
+    try {
+      const result = await createForumPost(supabase, {
+        userId: user.id,
+        titre,
+        body,
+        categorie,
+      })
+
+      router.push(`/forum/${result.id}`)
+    } catch (submitError) {
+      setError(submitError.message || 'Impossible de publier la discussion.')
+      setLoading(false)
     }
-
-    const { data, error } = await supabase
-      .from('forum_posts')
-      .insert({ titre: titre.trim(), body: body.trim(), categorie: cat, user_id: user.id })
-      .select('id')
-      .single()
-
-    if (error) {
-      setErr('Erreur : ' + error.message)
-      setLoading(false); return
-    }
-
-    router.push(`/forum/${data.id}`)
   }
 
-  if (authLoading) return null
+  if (authLoading || !user) return null
 
-  /* ─────────────────────────────────────── */
   return (
     <>
       <style>{`
-        /* ══ NOUVEAU POST ══ */
-        .np-page {
-          min-height: 80vh; background: var(--paper);
-          display: flex; flex-direction: column;
+        .new-page {
+          min-height: calc(100vh - 56px);
+          background:
+            radial-gradient(circle at top right, rgba(201,151,43,0.18), transparent 28%),
+            linear-gradient(180deg, #133421 0%, #133421 22%, #F6F7F4 22%, #F7F8F5 100%);
         }
-
-        .np-hero {
-          background: linear-gradient(140deg, var(--green-900), var(--green-700));
-          padding: 40px 24px 72px; text-align: center; color: white;
+        .new-shell {
+          max-width: 920px;
+          margin: 0 auto;
+          padding: 36px 16px 72px;
         }
-        .np-hero-eye { font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--gold-400); margin-bottom: 8px; }
-        .np-hero-title { font-family: var(--font-display); font-size: clamp(22px, 4vw, 36px); font-weight: 400; letter-spacing: -.02em; }
-        .np-hero-title em { font-style: italic; color: var(--gold-400); }
-
-        .np-body { max-width: 680px; margin: -40px auto 0; padding: 0 16px 72px; width: 100%; }
-
-        .np-back { display: inline-flex; align-items: center; gap: 5px; margin-bottom: 14px; font-size: 13px; color: var(--ink-3); text-decoration: none; transition: color .15s; }
-        .np-back:hover { color: var(--green-700); }
-
-        .np-card {
-          background: var(--white); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg);
-          padding: 32px; overflow: hidden;
+        .hero {
+          padding: 30px;
+          border-radius: 28px;
+          background: linear-gradient(135deg, rgba(15,47,27,0.96), rgba(24,91,52,0.92));
+          color: white;
+          box-shadow: var(--shadow-lg);
+          margin-bottom: 18px;
         }
-        @media (max-width: 600px) { .np-card { padding: 22px 18px; } }
-
-        /* Step 1 — Catégorie */
-        .step-label { font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 18px; }
-        .cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
-        .cat-option {
-          padding: 14px 16px; border-radius: var(--radius-md); border: 1.5px solid var(--paper-2);
-          background: var(--paper); cursor: pointer; transition: all .15s; text-align: left;
+        .hero-eyebrow {
+          font-size: 11px;
+          font-weight: 800;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+          color: var(--gold-400);
+          margin-bottom: 10px;
+        }
+        .hero-title {
+          font-family: var(--font-display);
+          font-size: clamp(30px, 5vw, 46px);
+          line-height: 1.04;
+          letter-spacing: -0.03em;
+          margin-bottom: 10px;
+        }
+        .hero-subtitle {
+          color: rgba(255,255,255,0.78);
+          line-height: 1.8;
+          max-width: 620px;
+        }
+        .form-card {
+          background: white;
+          border-radius: 28px;
+          box-shadow: var(--shadow-lg);
+          padding: 26px;
+        }
+        .back-link {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          text-decoration: none;
+          color: var(--green-700);
+          font-size: 13px;
+          font-weight: 700;
+          margin-bottom: 18px;
+        }
+        .warning {
+          padding: 14px 16px;
+          border-radius: 18px;
+          background: #FFF7ED;
+          border: 1px solid #FED7AA;
+          color: #9A3412;
+          font-size: 14px;
+          line-height: 1.7;
+          margin-bottom: 16px;
+        }
+        .field {
+          margin-bottom: 18px;
+        }
+        .label {
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 8px;
+          font-size: 12px;
+          font-weight: 800;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: var(--ink-3);
+        }
+        .input,
+        .textarea {
+          width: 100%;
+          padding: 14px 15px;
+          border-radius: 16px;
+          border: 1.5px solid var(--paper-2);
+          background: var(--paper);
+          color: var(--ink);
           font-family: var(--font-body);
+          font-size: 15px;
+          outline: none;
         }
-        .cat-option:hover { border-color: var(--green-300); background: var(--green-50); }
-        .cat-option.selected { border-color: var(--green-500); background: var(--green-50); box-shadow: 0 0 0 3px rgba(46,154,92,.1); }
-        .cat-opt-name { font-size: 14px; font-weight: 600; color: var(--ink); display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-        .cat-opt-desc { font-size: 11px; color: var(--ink-4); line-height: 1.5; }
-
-        .btn-next {
-          margin-top: 20px; padding: 13px 28px; background: var(--green-700); color: white; border: none;
-          border-radius: var(--radius-md); font-family: var(--font-body); font-size: 15px; font-weight: 600;
-          cursor: pointer; transition: background .15s; display: block; width: 100%;
+        .input:focus,
+        .textarea:focus {
+          border-color: var(--green-500);
+          background: white;
+          box-shadow: 0 0 0 3px rgba(46,154,92,0.12);
         }
-        .btn-next:hover:not(:disabled) { background: var(--green-800); }
-        .btn-next:disabled { opacity: .5; cursor: not-allowed; }
-
-        /* Step 2 — Form */
-        .step-header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1.5px solid var(--paper-2); }
-        .step-back-btn {
-          padding: 6px 12px; background: var(--paper); border: 1.5px solid var(--paper-2); border-radius: var(--radius-sm);
-          font-family: var(--font-body); font-size: 13px; color: var(--ink-3); cursor: pointer; transition: all .15s;
+        .textarea {
+          min-height: 180px;
+          resize: vertical;
+          line-height: 1.7;
         }
-        .step-back-btn:hover { border-color: var(--green-300); color: var(--green-700); }
-        .selected-cat-chip {
-          padding: 5px 12px; border-radius: 100px; font-size: 12px; font-weight: 700;
-          background: var(--green-50); color: var(--green-700); border: 1px solid var(--green-200);
+        .categories {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+          gap: 10px;
         }
-
-        .f-field { margin-bottom: 20px; }
-        .f-label { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 7px; display: flex; justify-content: space-between; }
-        .f-input {
-          width: 100%; padding: 13px 15px; border-radius: var(--radius-md); border: 1.5px solid var(--paper-2);
-          background: var(--paper); font-family: var(--font-body); font-size: 15px; color: var(--ink); outline: none;
-          transition: all .2s;
+        .category-btn {
+          padding: 14px 12px;
+          border-radius: 18px;
+          border: 1.5px solid var(--paper-2);
+          background: white;
+          color: var(--ink-3);
+          font-size: 14px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all .15s ease;
         }
-        .f-input:focus { border-color: var(--green-500); background: var(--white); box-shadow: 0 0 0 3px rgba(46,154,92,.1); }
-        .f-input::placeholder { color: var(--ink-4); font-size: 14px; }
-        .f-textarea { resize: vertical; min-height: 130px; font-size: 14px; line-height: 1.7; }
-
-        .f-tips { background: var(--gold-50); border: 1px solid var(--gold-100); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 20px; }
-        .f-tips-title { font-size: 12px; font-weight: 700; color: var(--gold-700); margin-bottom: 8px; }
-        .f-tips-list { font-size: 12px; color: var(--gold-700); list-style: none; display: flex; flex-direction: column; gap: 4px; }
-
-        .f-submit {
-          width: 100%; padding: 15px; background: var(--green-700); color: white; border: none;
-          border-radius: var(--radius-md); font-family: var(--font-display); font-size: 16px;
-          font-weight: 500; cursor: pointer; transition: background .15s;
+        .category-btn.active {
+          background: var(--green-50);
+          border-color: var(--green-300);
+          color: var(--green-700);
         }
-        .f-submit:hover:not(:disabled) { background: var(--green-800); }
-        .f-submit:disabled { opacity: .6; cursor: not-allowed; }
-
-        .f-err { padding: 12px 14px; background: #FEF2F2; border: 1px solid #FECACA; border-radius: var(--radius-md); font-size: 13px; color: #DC2626; margin-bottom: 14px; }
-
-        /* Progress bar */
-        .np-progress { height: 3px; background: var(--paper-2); border-radius: 100px; margin-bottom: 24px; overflow: hidden; }
-        .np-progress-fill { height: 100%; background: var(--green-500); border-radius: 100px; transition: width .3s ease; }
+        .tips {
+          padding: 16px 18px;
+          border-radius: 20px;
+          background: var(--paper);
+          border: 1px solid var(--paper-2);
+          color: var(--ink-2);
+          line-height: 1.7;
+          font-size: 14px;
+          margin-bottom: 20px;
+        }
+        .actions {
+          display: flex;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        .btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 160px;
+          padding: 14px 18px;
+          border-radius: 16px;
+          border: 1.5px solid var(--paper-2);
+          background: white;
+          color: var(--ink);
+          font-size: 14px;
+          font-weight: 700;
+          text-decoration: none;
+          cursor: pointer;
+        }
+        .btn.primary {
+          background: linear-gradient(135deg, var(--green-700), #1E8A4A);
+          border: none;
+          color: white;
+        }
       `}</style>
 
-      <div className="np-page">
-        <div className="np-hero">
-          <p className="np-hero-eye">💬 Forum</p>
-          <h1 className="np-hero-title">Nouvelle <em>discussion</em></h1>
-        </div>
+      <div className="new-page">
+        <div className="new-shell">
+          <div className="hero">
+            <p className="hero-eyebrow">Forum BAC Mali</p>
+            <h1 className="hero-title">Nouvelle discussion</h1>
+            <p className="hero-subtitle">
+              Décris clairement ton besoin pour aider la communauté à te répondre vite, même quand le forum tourne sur une ancienne structure de base de données.
+            </p>
+          </div>
 
-        <div className="np-body">
-          <Link href="/forum" className="np-back">← Retour au forum</Link>
+          <Link href="/forum" className="back-link">← Retour au forum</Link>
 
-          <div className="np-card">
-            {/* Progress */}
-            <div className="np-progress">
-              <div className="np-progress-fill" style={{ width: step === 1 ? '40%' : '100%' }} />
+          <div className="form-card">
+            {!forumReady && (
+              <div className="warning">
+                La publication nécessite une configuration Supabase valide. {getSupabaseBrowserConfigError()}
+              </div>
+            )}
+
+            {error && <div className="warning">{error}</div>}
+
+            <div className="tips">
+              Un bon message contient un titre précis, le contexte utile et ce que tu as déjà essayé. Cela améliore fortement la qualité des réponses.
             </div>
 
-            {/* STEP 1: Choisir la catégorie */}
-            {step === 1 && (
-              <>
-                <div className="step-label">Étape 1 / 2 — Choisissez une catégorie</div>
-                <div className="cat-grid">
-                  {CATEGORIES.map(c => (
+            <form onSubmit={handleSubmit}>
+              <div className="field">
+                <div className="label">
+                  <span>Catégorie</span>
+                  <span>{categorie}</span>
+                </div>
+                <div className="categories">
+                  {FORM_CATEGORIES.map((item) => (
                     <button
-                      key={c}
-                      className={`cat-option${cat === c ? ' selected' : ''}`}
-                      onClick={() => setCat(c)}
+                      key={item}
+                      className={`category-btn${categorie === item ? ' active' : ''}`}
+                      onClick={() => setCategorie(item)}
                       type="button"
                     >
-                      <div className="cat-opt-name">
-                        {c === 'Orientation' && '🧭'}
-                        {c === 'Cours'       && '📚'}
-                        {c === 'Examen'      && '📝'}
-                        {c === 'Université'  && '🏛️'}
-                        {c === 'Bourse'      && '💰'}
-                        {c === 'Conseils'    && '💡'}
-                        {c === 'Autres'      && '📌'}
-                        {c}
-                      </div>
-                      <div className="cat-opt-desc">{CAT_DESCRIPTIONS[c]}</div>
+                      {item}
                     </button>
                   ))}
                 </div>
-                <button className="btn-next" disabled={!cat} onClick={() => setStep(2)}>
-                  Continuer →
+              </div>
+
+              <div className="field">
+                <div className="label">
+                  <span>Titre</span>
+                  <span>{titre.length}/200</span>
+                </div>
+                <input
+                  className="input"
+                  type="text"
+                  value={titre}
+                  onChange={(event) => setTitre(event.target.value)}
+                  placeholder="Ex : Comment faire une demande de bourse CENOU ?"
+                  minLength={10}
+                  maxLength={200}
+                  required
+                />
+              </div>
+
+              <div className="field">
+                <div className="label">
+                  <span>Description</span>
+                  <span>{body.length}/5000</span>
+                </div>
+                <textarea
+                  className="textarea"
+                  value={body}
+                  onChange={(event) => setBody(event.target.value)}
+                  placeholder="Explique ton besoin, ton niveau, ta série et ce que tu as déjà essayé."
+                  minLength={20}
+                  maxLength={5000}
+                  required
+                />
+              </div>
+
+              <div className="actions">
+                <button className="btn primary" type="submit" disabled={loading || !forumReady}>
+                  {loading ? 'Publication...' : 'Publier la discussion'}
                 </button>
-              </>
-            )}
-
-            {/* STEP 2: Formulaire */}
-            {step === 2 && (
-              <>
-                <div className="step-header">
-                  <button className="step-back-btn" onClick={() => setStep(1)} type="button">← Retour</button>
-                  <span className="selected-cat-chip">
-                    {cat === 'Orientation' && '🧭'}
-                    {cat === 'Cours'       && '📚'}
-                    {cat === 'Examen'      && '📝'}
-                    {cat === 'Université'  && '🏛️'}
-                    {cat === 'Bourse'      && '💰'}
-                    {cat === 'Conseils'    && '💡'}
-                    {cat === 'Autres'      && '📌'}
-                    {' '}{cat}
-                  </span>
-                  <span style={{ fontSize: 11, color: 'var(--ink-4)' }}>Étape 2 / 2</span>
-                </div>
-
-                {/* Tips */}
-                <div className="f-tips">
-                  <div className="f-tips-title">💡 Conseil pour une bonne question</div>
-                  <ul className="f-tips-list">
-                    <li>• Titre précis : « Comment demander CENOU ? » plutôt que « Aide svp »</li>
-                    <li>• Donnez du contexte dans la description</li>
-                    <li>• Une seule question par post</li>
-                  </ul>
-                </div>
-
-                <form onSubmit={handleSubmit}>
-                  <div className="f-field">
-                    <div className="f-label">
-                      <span>Titre de la question</span>
-                      <span style={{ textTransform: 'none', letterSpacing: 0, fontSize: 11, color: titre.length < 10 ? '#DC2626' : 'var(--ink-4)' }}>
-                        {titre.length}/200
-                      </span>
-                    </div>
-                    <input
-                      className="f-input"
-                      type="text"
-                      placeholder="Ex : Comment faire une demande de bourse CENOU ?"
-                      value={titre}
-                      onChange={e => setTitre(e.target.value)}
-                      maxLength={200}
-                      required
-                    />
-                  </div>
-
-                  <div className="f-field">
-                    <div className="f-label">
-                      <span>Détails (description)</span>
-                      <span style={{ textTransform: 'none', letterSpacing: 0, fontSize: 11, color: body.length < 20 && body.length > 0 ? '#DC2626' : 'var(--ink-4)' }}>
-                        {body.length}/5000
-                      </span>
-                    </div>
-                    <textarea
-                      className="f-input f-textarea"
-                      placeholder="Donnez plus de contexte : votre filière, votre niveau, ce que vous avez déjà essayé…"
-                      value={body}
-                      onChange={e => setBody(e.target.value)}
-                      maxLength={5000}
-                      required
-                    />
-                  </div>
-
-                  {err && <div className="f-err">⚠️ {err}</div>}
-
-                  <button
-                    className="f-submit"
-                    type="submit"
-                    disabled={loading || titre.length < 10 || body.length < 20}
-                  >
-                    {loading ? '⏳ Publication en cours…' : '🚀 Publier la discussion'}
-                  </button>
-                </form>
-              </>
-            )}
+                <Link href="/forum" className="btn">Annuler</Link>
+              </div>
+            </form>
           </div>
         </div>
       </div>

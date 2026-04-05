@@ -53,7 +53,7 @@ export default function ResetPasswordPage() {
             </div>
             <button className="btn" type="submit" disabled={loading}>{loading ? 'Envoi…' : 'Envoyer le lien'}</button>
           </form>
-          <Link href="/compte" className="rp-link">← Retour à la connexion</Link>
+          <Link href="/login" className="rp-link">← Retour à la connexion</Link>
         </div>
       </div>
     </>

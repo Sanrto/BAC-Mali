@@ -36,7 +36,7 @@ export default function UpdatePasswordPage() {
     if (error) setMessage({ type: 'error', text: error.message })
     else {
       setMessage({ type: 'success', text: 'Mot de passe mis à jour. Vous pouvez maintenant vous reconnecter.' })
-      setTimeout(() => router.push('/compte'), 1200)
+      setTimeout(() => router.push('/login'), 1200)
     }
     setLoading(false)
   }

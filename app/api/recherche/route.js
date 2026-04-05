@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
+import { getPublicSupabaseConfigError, getPublicSupabaseConfig } from '../../../lib/supabase-config'
 
 const CENTRES = [
   'BAMAKO RIVE DROITE',
@@ -22,6 +23,14 @@ const CENTRES = [
 ]
 
 export async function GET(request) {
+  const configError = getPublicSupabaseConfigError()
+  if (configError) {
+    return NextResponse.json(
+      { error: `Configuration Supabase invalide: ${configError}` },
+      { status: 500 }
+    )
+  }
+
   const { searchParams } = new URL(request.url)
   const numero = searchParams.get('numero')?.trim()
   const annee  = searchParams.get('annee')?.trim()
@@ -51,10 +60,8 @@ export async function GET(request) {
     )
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  )
+  const { url, anonKey } = getPublicSupabaseConfig()
+  const supabase = createClient(url, anonKey)
 
   const { data, error } = await supabase
     .from('candidats')

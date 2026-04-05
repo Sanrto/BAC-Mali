@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 
-const WHATSAPP_NUMBER = '22375501304' // ← Remplacer par le vrai numéro
+const WHATSAPP_NUMBER = '22370000000' // ← Remplacer par le vrai numéro
 const TELEGRAM_HANDLE = 'lordelsanto'  // ← Remplacer si nécessaire
 
 export default function WhatsAppButton() {

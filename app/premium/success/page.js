@@ -1,8 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { useAuth } from '../../contexts/AuthContext'
 import { getSupabaseClient } from '../../../lib/supabaseClient'
 
@@ -10,13 +10,18 @@ export default function PremiumSuccessPage() {
   const { user, profile } = useAuth()
   const supabase = getSupabaseClient()
   const router = useRouter()
-  const searchParams = useSearchParams()
   const [loading, setLoading] = useState(false)
-  const canceled = searchParams.get('canceled') === '1'
+  const [canceled, setCanceled] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    setCanceled(params.get('canceled') === '1')
+  }, [])
 
   async function startCheckout() {
     if (!user) {
-      router.push('/compte')
+      router.push('/login')
       return
     }
 
@@ -76,7 +81,7 @@ export default function PremiumSuccessPage() {
             </aside>
           </div>
           <div style={{ marginTop: 18 }}>
-            <Link href="/profil" style={{ color: 'var(--green-700)', textDecoration: 'none' }}>← Retour au profil</Link>
+            <Link href="/profile" style={{ color: 'var(--green-700)', textDecoration: 'none' }}>← Retour au profil</Link>
           </div>
         </div>
       </div>

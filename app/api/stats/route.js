@@ -1,12 +1,19 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
+import { getPublicSupabaseConfig, getPublicSupabaseConfigError } from '../../../lib/supabase-config'
 
 export async function GET() {
   try {
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-    )
+    const configError = getPublicSupabaseConfigError()
+    if (configError) {
+      return NextResponse.json(
+        { error: `Configuration Supabase invalide: ${configError}` },
+        { status: 500 }
+      )
+    }
+
+    const { url, anonKey } = getPublicSupabaseConfig()
+    const supabase = createClient(url, anonKey)
 
     // 1. Trouver l'année la plus récente dans la base
     const { data: anneeData, error: anneeError } = await supabase

@@ -1,474 +1,666 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { startTransition, useCallback, useDeferredValue, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { getSupabaseClient } from '../../lib/supabaseClient'
+import {
+  getSupabaseBrowserConfigError,
+  getSupabaseClient,
+  isSupabaseConfigured,
+} from '../../lib/supabaseClient'
 import { useAuth } from '../contexts/AuthContext'
+import { FORUM_CATEGORIES, getForumStats, listForumPosts } from '../../lib/forum-client'
 
-/* ─────────────────────────────────────────
-   CONSTANTES
-───────────────────────────────────────── */
-const CATEGORIES = ['Toutes', 'Orientation', 'Cours', 'Examen', 'Université', 'Bourse', 'Conseils', 'Autres']
-const PAGE_SIZE  = 15
+const SORT_OPTIONS = [
+  { key: 'recent', label: 'Récents' },
+  { key: 'popular', label: 'Populaires' },
+  { key: 'unanswered', label: 'Sans réponse' },
+]
 
-const CAT_COLORS = {
-  Orientation: '#2563EB', Cours: '#7C3AED', Examen: '#DC2626',
-  Université: '#0891B2', Bourse: '#D97706', Conseils: '#059669', Autres: '#6B7280'
+const CATEGORY_COLORS = {
+  Orientation: '#2563EB',
+  Cours: '#7C3AED',
+  Examen: '#DC2626',
+  Université: '#0891B2',
+  Bourse: '#D97706',
+  Conseils: '#059669',
+  Autres: '#6B7280',
 }
 
-const BADGE_CFG = {
-  nouveau:    { label: 'Nouveau',    icon: '🌱', color: '#6B7280' },
-  actif:      { label: 'Actif',      icon: '⚡', color: '#2563EB' },
-  tres_actif: { label: 'Très Actif', icon: '🔥', color: '#D97706' },
-  expert:     { label: 'Expert',     icon: '🏆', color: '#059669' },
-  premium:    { label: 'Premium',    icon: '⭐', color: '#7C3AED' },
-}
+function timeAgo(value) {
+  const diff = Date.now() - new Date(value).getTime()
+  const minutes = Math.max(0, Math.floor(diff / 60000))
 
-/* ─────────────────────────────────────────
-   UTILITAIRES
-───────────────────────────────────────── */
-function timeAgo(dateStr) {
-  const diff = Date.now() - new Date(dateStr).getTime()
-  const m = Math.floor(diff / 60000)
-  if (m < 1)   return 'à l\'instant'
-  if (m < 60)  return `il y a ${m}min`
-  const h = Math.floor(m / 60)
-  if (h < 24)  return `il y a ${h}h`
-  const d = Math.floor(h / 24)
-  return d < 30 ? `il y a ${d}j` : new Date(dateStr).toLocaleDateString('fr-FR')
+  if (minutes < 1) return "à l'instant"
+  if (minutes < 60) return `il y a ${minutes} min`
+
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `il y a ${hours} h`
+
+  const days = Math.floor(hours / 24)
+  if (days < 30) return `il y a ${days} j`
+
+  return new Date(value).toLocaleDateString('fr-FR')
 }
 
 function avatarUrl(username) {
   return `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(username ?? 'U')}&backgroundColor=145a30&textColor=ffffff&fontSize=38`
 }
 
-/* ─────────────────────────────────────────
-   COMPOSANTS UI
-───────────────────────────────────────── */
-function BadgeChip({ badge }) {
-  const cfg = BADGE_CFG[badge] ?? BADGE_CFG.nouveau
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 3,
-      padding: '1px 7px', borderRadius: 100, fontSize: 10, fontWeight: 700,
-      background: cfg.color + '18', color: cfg.color,
-      border: `1px solid ${cfg.color}40`
-    }}>
-      {cfg.icon} {cfg.label}
-    </span>
-  )
-}
-
-function CatBadge({ cat }) {
-  const c = CAT_COLORS[cat] ?? '#6B7280'
-  return (
-    <span style={{
-      padding: '2px 9px', borderRadius: 100, fontSize: 11, fontWeight: 600,
-      background: c + '14', color: c, border: `1px solid ${c}28`
-    }}>{cat}</span>
-  )
-}
-
-/* ─────────────────────────────────────────
-   CARTE POST
-───────────────────────────────────────── */
 function PostCard({ post }) {
-  const { id, titre, body, categorie, votes_score, comments_count, created_at, is_resolved, username, avatar_url, badge } = post
-  const excerpt = body?.length > 130 ? body.slice(0, 130) + '…' : body
-  const scoreColor = votes_score > 0 ? 'var(--green-700)' : votes_score < 0 ? '#DC2626' : 'var(--ink-4)'
+  const categoryColor = CATEGORY_COLORS[post.categorie] ?? CATEGORY_COLORS.Autres
+  const excerpt = post.body?.length > 150 ? `${post.body.slice(0, 150)}...` : post.body
 
   return (
-    <Link href={`/forum/${id}`} className="post-card-link">
-      <article className="post-card">
-        {/* Score */}
-        <div className="post-score-col">
-          <span className="score-num" style={{ color: scoreColor }}>{votes_score}</span>
-          <span className="score-label">votes</span>
-          <span className="comments-col">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
-            </svg>
-            {comments_count ?? 0}
+    <Link href={`/forum/${post.id}`} className="post-card">
+      <div className="post-top">
+        <div className="post-meta-left">
+          <span className="post-category" style={{ color: categoryColor, borderColor: `${categoryColor}30`, background: `${categoryColor}12` }}>
+            {post.categorie}
           </span>
+          {post.is_resolved && <span className="post-resolved">Résolu</span>}
+        </div>
+        <span className="post-time">{timeAgo(post.created_at)}</span>
+      </div>
+
+      <h3 className="post-title">{post.titre}</h3>
+      {excerpt ? <p className="post-excerpt">{excerpt}</p> : null}
+
+      <div className="post-footer">
+        <div className="post-author">
+          <img src={post.avatar_url ?? avatarUrl(post.username)} alt="" className="post-avatar" />
+          <div>
+            <strong>{post.username}</strong>
+            <span>{post.reputation || 0} pts</span>
+          </div>
         </div>
 
-        {/* Content */}
-        <div className="post-main">
-          <div className="post-tags">
-            <CatBadge cat={categorie} />
-            {is_resolved && (
-              <span className="resolved-tag">✅ Résolu</span>
-            )}
-          </div>
-          <h3 className="post-titre">{titre}</h3>
-          {excerpt && <p className="post-excerpt">{excerpt}</p>}
-          <div className="post-meta-row">
-            <span className="meta-author">
-              <img
-                src={avatar_url ?? avatarUrl(username)}
-                alt="" className="mini-avatar"
-              />
-              <strong>{username ?? 'Anonyme'}</strong>
-              {badge && <BadgeChip badge={badge} />}
-            </span>
-            <span className="meta-time">🕐 {timeAgo(created_at)}</span>
-          </div>
+        <div className="post-stats">
+          <span>{post.comments_count} messages</span>
+          <span>{post.votes_score} score</span>
         </div>
-      </article>
+      </div>
     </Link>
   )
 }
 
-/* ─────────────────────────────────────────
-   PAGE PRINCIPALE
-───────────────────────────────────────── */
 export default function ForumPage() {
-  const [posts, setPosts]     = useState([])
-  const [loading, setLoading] = useState(true)
-  const [hasMore, setHasMore] = useState(false)
-  const [offset, setOffset]   = useState(0)
-  const [cat, setCat]         = useState('Toutes')
-  const [sort, setSort]       = useState('recent')   // 'recent' | 'popular' | 'unanswered'
-  const [search, setSearch]   = useState('')
-  const [stats, setStats]     = useState({ posts: 0, members: 0 })
-  const { user, loading: authLoading } = useAuth()
   const supabase = getSupabaseClient()
+  const forumReady = isSupabaseConfigured()
+  const { user, loading: authLoading } = useAuth()
 
-  /* ── Chargement des posts ── */
-  const loadPosts = useCallback(async (reset = true) => {
+  const [posts, setPosts] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [stats, setStats] = useState({ posts: 0, members: 0 })
+  const [category, setCategory] = useState('Toutes')
+  const [sort, setSort] = useState('recent')
+  const [search, setSearch] = useState('')
+  const [offset, setOffset] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
+  const [forumMode, setForumMode] = useState('')
+
+  const deferredSearch = useDeferredValue(search)
+
+  const loadPosts = useCallback(async (reset = true, startFrom = 0) => {
+    if (!supabase) {
+      setLoading(false)
+      return
+    }
+
     setLoading(true)
-    const start = reset ? 0 : offset
+    setError('')
 
-    let q = supabase
-      .from('forum_posts_view')
-      .select('id, titre, body, categorie, votes_score, comments_count, is_resolved, created_at, username, avatar_url, badge')
-      .range(start, start + PAGE_SIZE - 1)
+    try {
+      const result = await listForumPosts(supabase, {
+        category,
+        sort,
+        search: deferredSearch,
+        offset: startFrom,
+        limit: 12,
+      })
 
-    if (cat !== 'Toutes') q = q.eq('categorie', cat)
-    if (sort === 'unanswered') q = q.eq('comments_count', 0)
-    if (search.trim()) q = q.ilike('titre', `%${search.trim()}%`)
-
-    if (sort === 'popular') {
-      q = q.order('votes_score', { ascending: false }).order('created_at', { ascending: false })
-    } else {
-      q = q.order('created_at', { ascending: false })
+      startTransition(() => {
+        setForumMode(result.mode)
+        setPosts((current) => (reset ? result.posts : [...current, ...result.posts]))
+        setHasMore(result.hasMore)
+        setOffset(result.nextOffset)
+      })
+    } catch (loadError) {
+      setError(loadError.message || 'Impossible de charger le forum.')
+    } finally {
+      setLoading(false)
     }
-
-    const { data, error } = await q
-    if (!error) {
-      const rows = data ?? []
-      setPosts(prev => reset ? rows : [...prev, ...rows])
-      setHasMore(rows.length === PAGE_SIZE)
-      setOffset(reset ? PAGE_SIZE : start + PAGE_SIZE)
-    }
-    setLoading(false)
-  }, [cat, sort, search, offset])
-
-  /* ── Effets ── */
-  useEffect(() => { loadPosts(true) }, [cat, sort])
+  }, [category, deferredSearch, sort, supabase])
 
   useEffect(() => {
-    const t = setTimeout(() => loadPosts(true), 380)
-    return () => clearTimeout(t)
-  }, [search])
+    loadPosts(true, 0)
+  }, [loadPosts])
 
   useEffect(() => {
-    Promise.all([
-      supabase.from('forum_posts').select('id', { count: 'exact', head: true }),
-      supabase.from('profiles').select('id', { count: 'exact', head: true }),
-    ]).then(([{ count: p }, { count: m }]) => {
-      setStats({ posts: p ?? 0, members: m ?? 0 })
-    })
-  }, [])
+    if (!supabase) return
 
-  /* ─────────────────────────────────────── */
+    let active = true
+
+    getForumStats(supabase)
+      .then((data) => {
+        if (active) {
+          setStats({ posts: data.posts, members: data.members })
+          setForumMode((current) => current || data.mode)
+        }
+      })
+      .catch(() => {})
+
+    return () => {
+      active = false
+    }
+  }, [supabase])
+
   return (
     <>
       <style>{`
-        /* ══ FORUM PAGE ══ */
-        .forum-wrap { min-height: 80vh; background: var(--paper); }
-
-        /* Hero */
-        .forum-hero {
-          background: linear-gradient(140deg, var(--green-900) 0%, var(--green-700) 55%, #1E8A4A 100%);
-          color: white; padding: 56px 24px 88px; text-align: center; position: relative; overflow: hidden;
+        .forum-page {
+          min-height: calc(100vh - 56px);
+          background:
+            radial-gradient(circle at top left, rgba(46,154,92,0.14), transparent 30%),
+            linear-gradient(180deg, #11331F 0%, #11331F 26%, #F5F7F3 26%, #F7F8F5 100%);
         }
-        .forum-hero::after {
-          content: '';
-          position: absolute; inset: 0; pointer-events: none;
-          background: url("data:image/svg+xml,%3Csvg width='40' height='40' viewBox='0 0 40 40' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23fff' fill-opacity='0.03' fill-rule='evenodd'%3E%3Cpath d='M0 40L40 0H20L0 20M40 40V20L20 40'/%3E%3C/g%3E%3C/svg%3E");
+        .forum-shell {
+          max-width: 1120px;
+          margin: 0 auto;
+          padding: 36px 16px 72px;
         }
-        .hero-eyebrow { position: relative; font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--gold-400); margin-bottom: 10px; }
-        .hero-title { position: relative; font-family: var(--font-display); font-size: clamp(28px, 5vw, 48px); font-weight: 400; letter-spacing: -.02em; line-height: 1.1; margin-bottom: 10px; }
-        .hero-title em { font-style: italic; color: var(--gold-400); }
-        .hero-sub { position: relative; font-size: 15px; color: rgba(255,255,255,.65); max-width: 440px; margin: 0 auto 24px; line-height: 1.6; }
-        .hero-stats { position: relative; display: flex; gap: 32px; justify-content: center; }
-        .hstat { text-align: center; }
-        .hstat-n { font-family: var(--font-display); font-size: 26px; font-weight: 500; color: var(--gold-400); }
-        .hstat-l { font-size: 11px; color: rgba(255,255,255,.55); margin-top: 1px; }
-
-        /* Layout */
-        .forum-body {
-          max-width: 960px; margin: -44px auto 0; padding: 0 16px 72px;
-          display: grid; grid-template-columns: 1fr 256px; gap: 20px; align-items: start;
+        .hero {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 280px;
+          gap: 20px;
+          margin-bottom: 22px;
         }
-        @media (max-width: 760px) {
-          .forum-body { grid-template-columns: 1fr; }
-          .f-sidebar { display: none; }
+        .hero-card,
+        .panel {
+          border-radius: 28px;
+          box-shadow: var(--shadow-lg);
         }
-
-        /* Controls */
-        .f-controls {
-          background: var(--white); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg);
-          padding: 16px 18px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 12px;
-          position: sticky; top: 12px; z-index: 10;
+        .hero-card {
+          padding: 30px;
+          color: white;
+          background:
+            radial-gradient(circle at top right, rgba(201,151,43,0.25), transparent 34%),
+            linear-gradient(135deg, rgba(15,47,27,0.96), rgba(24,91,52,0.92));
         }
-        .ctrl-top { display: flex; gap: 10px; align-items: center; }
-        .f-search {
-          flex: 1; padding: 10px 14px 10px 38px; border-radius: var(--radius-md);
-          border: 1.5px solid var(--paper-2); background: var(--paper);
-          font-family: var(--font-body); font-size: 14px; color: var(--ink); outline: none;
-          transition: all .2s;
+        .hero-eyebrow {
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+          color: var(--gold-400);
+          margin-bottom: 12px;
         }
-        .f-search:focus { border-color: var(--green-500); background: var(--white); box-shadow: 0 0 0 3px rgba(46,154,92,.1); }
-        .f-search::placeholder { color: var(--ink-4); }
-        .search-wrap { position: relative; flex: 1; }
-        .search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--ink-4); font-size: 14px; pointer-events: none; }
-
-        .btn-new {
-          display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
-          padding: 10px 18px; background: var(--green-700); color: white; border: none;
-          border-radius: var(--radius-md); font-family: var(--font-body); font-size: 13px;
-          font-weight: 600; cursor: pointer; transition: background .15s; text-decoration: none;
+        .hero-title {
+          font-family: var(--font-display);
+          font-size: clamp(34px, 6vw, 54px);
+          line-height: 1.02;
+          letter-spacing: -0.03em;
+          margin-bottom: 12px;
         }
-        .btn-new:hover { background: var(--green-800); }
-        .btn-new.outline {
-          background: var(--paper); color: var(--ink-2); border: 1.5px solid var(--paper-2);
+        .hero-subtitle {
+          max-width: 620px;
+          color: rgba(255,255,255,0.76);
+          line-height: 1.8;
+          font-size: 15px;
+          margin-bottom: 24px;
         }
-        .btn-new.outline:hover { background: var(--paper-2); }
-
-        .cats-row { display: flex; gap: 6px; flex-wrap: wrap; }
-        .cat-pill {
-          padding: 4px 12px; border-radius: 100px; font-size: 12px; font-weight: 600;
-          border: 1.5px solid var(--paper-2); background: var(--white); color: var(--ink-3);
-          cursor: pointer; transition: all .15s; font-family: var(--font-body);
+        .hero-actions {
+          display: flex;
+          gap: 10px;
+          flex-wrap: wrap;
         }
-        .cat-pill:hover  { border-color: var(--green-300); color: var(--green-700); }
-        .cat-pill.active { background: var(--green-700); border-color: var(--green-700); color: white; }
-
-        .sort-tabs { display: flex; gap: 2px; border-top: 1.5px solid var(--paper-2); padding-top: 10px; }
-        .sort-tab {
-          padding: 5px 12px; font-size: 12px; font-weight: 600; background: none; border: none;
-          color: var(--ink-4); cursor: pointer; font-family: var(--font-body);
-          border-radius: var(--radius-sm); transition: all .15s;
+        .hero-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 11px 16px;
+          border-radius: 999px;
+          text-decoration: none;
+          font-size: 13px;
+          font-weight: 700;
+          transition: transform .15s ease;
         }
-        .sort-tab:hover  { color: var(--green-700); background: var(--green-50); }
-        .sort-tab.active { color: var(--green-700); background: var(--green-50); }
-
-        /* Post card */
-        .post-card-link { text-decoration: none; color: inherit; display: block; }
+        .hero-btn.primary {
+          background: var(--gold-400);
+          color: var(--green-900);
+        }
+        .hero-btn.secondary {
+          background: rgba(255,255,255,0.08);
+          color: white;
+          border: 1px solid rgba(255,255,255,0.14);
+        }
+        .hero-btn:hover { transform: translateY(-1px); }
+        .hero-side {
+          padding: 22px;
+          background: white;
+        }
+        .hero-side-grid {
+          display: grid;
+          gap: 12px;
+        }
+        .hero-stat {
+          padding: 16px;
+          border-radius: 20px;
+          background: var(--paper);
+          border: 1px solid var(--paper-2);
+        }
+        .hero-stat strong {
+          display: block;
+          font-family: var(--font-display);
+          font-size: 26px;
+          color: var(--green-700);
+          margin-bottom: 4px;
+        }
+        .hero-stat span {
+          font-size: 12px;
+          color: var(--ink-3);
+          line-height: 1.6;
+        }
+        .forum-layout {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 280px;
+          gap: 20px;
+          align-items: start;
+        }
+        .panel {
+          background: white;
+          padding: 22px;
+        }
+        .toolbar {
+          display: grid;
+          gap: 14px;
+          margin-bottom: 18px;
+        }
+        .toolbar-row {
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          flex-wrap: wrap;
+        }
+        .search {
+          flex: 1;
+          min-width: 220px;
+          padding: 13px 14px;
+          border-radius: 16px;
+          border: 1.5px solid var(--paper-2);
+          background: var(--paper);
+          font-family: var(--font-body);
+          font-size: 15px;
+          color: var(--ink);
+          outline: none;
+        }
+        .search:focus {
+          border-color: var(--green-500);
+          background: white;
+          box-shadow: 0 0 0 3px rgba(46,154,92,0.12);
+        }
+        .toolbar-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 12px 16px;
+          border-radius: 16px;
+          text-decoration: none;
+          font-size: 14px;
+          font-weight: 700;
+          border: 1.5px solid var(--paper-2);
+          background: white;
+          color: var(--ink);
+        }
+        .toolbar-btn.primary {
+          background: linear-gradient(135deg, var(--green-700), #1E8A4A);
+          color: white;
+          border: none;
+        }
+        .categories,
+        .sorts {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+        .pill {
+          padding: 9px 13px;
+          border-radius: 999px;
+          border: 1.5px solid var(--paper-2);
+          background: white;
+          color: var(--ink-3);
+          font-size: 13px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all .15s ease;
+        }
+        .pill:hover,
+        .pill.active {
+          background: var(--green-50);
+          border-color: var(--green-300);
+          color: var(--green-700);
+        }
+        .mode-pill {
+          display: inline-flex;
+          padding: 5px 10px;
+          border-radius: 999px;
+          font-size: 11px;
+          font-weight: 800;
+          background: #EFF6FF;
+          color: #1D4ED8;
+          border: 1px solid #BFDBFE;
+        }
+        .post-list {
+          display: grid;
+          gap: 12px;
+        }
         .post-card {
-          background: var(--white); border-radius: var(--radius-lg); border: 1.5px solid var(--paper-2);
-          padding: 14px 18px; display: flex; gap: 16px; transition: all .15s;
-          margin-bottom: 8px; cursor: pointer;
+          display: block;
+          padding: 18px;
+          border-radius: 22px;
+          text-decoration: none;
+          color: inherit;
+          border: 1.5px solid var(--paper-2);
+          background: linear-gradient(180deg, #FFFFFF 0%, #FBFDFB 100%);
+          transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
         }
-        .post-card:hover { border-color: var(--green-300); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
-
-        .post-score-col {
-          display: flex; flex-direction: column; align-items: center; gap: 2px;
-          min-width: 40px; padding-top: 2px;
+        .post-card:hover {
+          transform: translateY(-2px);
+          border-color: var(--green-300);
+          box-shadow: var(--shadow-sm);
         }
-        .score-num { font-family: var(--font-display); font-size: 20px; font-weight: 500; line-height: 1; }
-        .score-label { font-size: 9px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-4); }
-        .comments-col { display: flex; align-items: center; gap: 3px; font-size: 12px; color: var(--ink-4); margin-top: 6px; }
-
-        .post-main { flex: 1; min-width: 0; }
-        .post-tags { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 7px; }
-        .resolved-tag {
-          padding: 1px 8px; border-radius: 100px; font-size: 11px; font-weight: 600;
-          background: #D1FAE5; color: #065F46; border: 1px solid #A7F3D0;
+        .post-top,
+        .post-footer {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
         }
-        .post-titre { font-size: 15px; font-weight: 600; color: var(--ink); line-height: 1.35; margin-bottom: 5px; }
-        .post-excerpt { font-size: 13px; color: var(--ink-3); line-height: 1.55; margin-bottom: 10px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-
-        .post-meta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-        .meta-author { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-3); }
-        .meta-author strong { color: var(--ink-2); font-weight: 600; }
-        .mini-avatar { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; border: 1px solid var(--paper-2); }
-        .meta-time { font-size: 12px; color: var(--ink-4); }
-
-        /* Skeleton */
-        .skel-list { display: flex; flex-direction: column; gap: 8px; }
-        .skel-card { height: 96px; border-radius: var(--radius-lg); background: linear-gradient(90deg, var(--paper) 25%, var(--paper-2) 50%, var(--paper) 75%); background-size: 200% 100%; animation: shimmer 1.4s ease infinite; }
-
-        /* Load more */
-        .btn-load-more {
-          width: 100%; padding: 13px; background: var(--white); border: 1.5px solid var(--paper-2);
-          border-radius: var(--radius-lg); font-family: var(--font-body); font-size: 14px;
-          color: var(--ink-3); cursor: pointer; transition: all .15s; margin-top: 4px;
+        .post-meta-left {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
         }
-        .btn-load-more:hover { border-color: var(--green-300); color: var(--green-700); }
-
-        /* Empty */
-        .f-empty { text-align: center; padding: 52px 20px; }
-        .f-empty h3 { font-family: var(--font-display); font-size: 20px; color: var(--ink); margin-bottom: 8px; }
-        .f-empty p { font-size: 14px; color: var(--ink-3); }
-
-        /* Sidebar */
-        .f-sidebar { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 12px; }
-        .sb-card {
-          background: var(--white); border-radius: var(--radius-lg); border: 1.5px solid var(--paper-2);
-          padding: 18px 20px;
+        .post-category,
+        .post-resolved {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 5px 10px;
+          border-radius: 999px;
+          font-size: 11px;
+          font-weight: 800;
+          border: 1px solid transparent;
         }
-        .sb-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--ink-3); margin-bottom: 14px; }
-        .sb-rule { font-size: 13px; color: var(--ink-2); padding: 7px 0; border-bottom: 1px solid var(--paper-2); display: flex; gap: 8px; }
-        .sb-rule:last-child { border-bottom: none; padding-bottom: 0; }
-        .sb-badge-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; font-size: 13px; color: var(--ink-2); }
-        .sb-badge-row:not(:last-child) { border-bottom: 1px solid var(--paper-2); }
+        .post-resolved {
+          color: #166534;
+          background: #DCFCE7;
+          border-color: #BBF7D0;
+        }
+        .post-time {
+          font-size: 12px;
+          color: var(--ink-4);
+        }
+        .post-title {
+          font-size: 19px;
+          line-height: 1.35;
+          color: var(--ink);
+          margin: 12px 0 8px;
+        }
+        .post-excerpt {
+          color: var(--ink-3);
+          font-size: 14px;
+          line-height: 1.7;
+          margin-bottom: 16px;
+        }
+        .post-author {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+        .post-author strong {
+          display: block;
+          color: var(--ink);
+          font-size: 14px;
+        }
+        .post-author span {
+          font-size: 12px;
+          color: var(--ink-4);
+        }
+        .post-avatar {
+          width: 38px;
+          height: 38px;
+          border-radius: 50%;
+          object-fit: cover;
+          border: 1px solid var(--paper-2);
+        }
+        .post-stats {
+          display: flex;
+          gap: 12px;
+          flex-wrap: wrap;
+          color: var(--ink-4);
+          font-size: 12px;
+        }
+        .empty,
+        .warning {
+          padding: 18px;
+          border-radius: 20px;
+          font-size: 14px;
+          line-height: 1.7;
+        }
+        .empty {
+          background: var(--paper);
+          color: var(--ink-3);
+          border: 1px solid var(--paper-2);
+          text-align: center;
+        }
+        .warning {
+          background: #FFF7ED;
+          color: #9A3412;
+          border: 1px solid #FED7AA;
+        }
+        .load-more {
+          margin-top: 14px;
+          width: 100%;
+          padding: 13px;
+          border-radius: 16px;
+          border: 1.5px solid var(--paper-2);
+          background: white;
+          color: var(--ink-2);
+          font-size: 14px;
+          font-weight: 700;
+          cursor: pointer;
+        }
+        .sidebar-card {
+          padding: 18px;
+          border-radius: 22px;
+          background: white;
+          border: 1px solid var(--paper-2);
+          box-shadow: var(--shadow-sm);
+        }
+        .sidebar-card + .sidebar-card {
+          margin-top: 14px;
+        }
+        .sidebar-title {
+          font-size: 12px;
+          font-weight: 800;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          color: var(--ink-3);
+          margin-bottom: 14px;
+        }
+        .sidebar-list {
+          display: grid;
+          gap: 10px;
+          font-size: 13px;
+          color: var(--ink-2);
+          line-height: 1.6;
+        }
+        .skeleton {
+          height: 132px;
+          border-radius: 22px;
+          background: linear-gradient(90deg, var(--paper) 25%, var(--paper-2) 50%, var(--paper) 75%);
+          background-size: 200% 100%;
+          animation: shimmer 1.3s linear infinite;
+        }
+        @keyframes shimmer {
+          0% { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
+        }
+        @media (max-width: 920px) {
+          .hero,
+          .forum-layout {
+            grid-template-columns: 1fr;
+          }
+        }
       `}</style>
 
-      <div className="forum-wrap">
-        {/* ── Hero ── */}
-        <section className="forum-hero">
-          <p className="hero-eyebrow">🎓 Communauté Étudiante</p>
-          <h1 className="hero-title">Forum <em>Entraide</em></h1>
-          <p className="hero-sub">Pose tes questions, partage ton expérience avec d'autres étudiants maliens.</p>
-          <div className="hero-stats">
-            <div className="hstat">
-              <div className="hstat-n">{stats.posts.toLocaleString('fr-FR')}</div>
-              <div className="hstat-l">discussions</div>
-            </div>
-            <div className="hstat">
-              <div className="hstat-n">{stats.members.toLocaleString('fr-FR')}</div>
-              <div className="hstat-l">membres</div>
-            </div>
-          </div>
-        </section>
-
-        {/* ── Body ── */}
-        <div className="forum-body">
-          {/* ── Colonne principale ── */}
-          <div>
-            {/* Controls */}
-            <div className="f-controls">
-              <div className="ctrl-top">
-                <div className="search-wrap">
-                  <span className="search-icon">🔍</span>
-                  <input
-                    className="f-search"
-                    type="text"
-                    placeholder="Rechercher une question…"
-                    value={search}
-                    onChange={e => setSearch(e.target.value)}
-                  />
-                </div>
-                {!authLoading && (
-                  user
-                    ? <Link href="/forum/nouveau" className="btn-new">+ Poster</Link>
-                    : <Link href="/compte" className="btn-new outline">Se connecter</Link>
-                )}
-              </div>
-
-              <div className="cats-row">
-                {CATEGORIES.map(c => (
-                  <button
-                    key={c}
-                    className={`cat-pill${cat === c ? ' active' : ''}`}
-                    onClick={() => setCat(c)}
-                  >{c}</button>
-                ))}
-              </div>
-
-              <div className="sort-tabs">
-                {[
-                  { key: 'recent',     label: '🕐 Récents' },
-                  { key: 'popular',    label: '🔥 Populaires' },
-                  { key: 'unanswered', label: '❓ Sans réponse' },
-                ].map(s => (
-                  <button
-                    key={s.key}
-                    className={`sort-tab${sort === s.key ? ' active' : ''}`}
-                    onClick={() => setSort(s.key)}
-                  >{s.label}</button>
-                ))}
-              </div>
-            </div>
-
-            {/* Posts */}
-            {loading && posts.length === 0 ? (
-              <div className="skel-list">
-                {[1, 2, 3, 4, 5].map(i => <div key={i} className="skel-card" />)}
-              </div>
-            ) : posts.length === 0 ? (
-              <div className="f-empty">
-                <h3>Aucune discussion trouvée</h3>
-                <p>
-                  {search
-                    ? `Aucun résultat pour « ${search} »`
-                    : 'Sois le premier à lancer une discussion !'}
-                </p>
-              </div>
-            ) : (
-              <>
-                {posts.map(p => <PostCard key={p.id} post={p} />)}
-                {hasMore && (
-                  <button
-                    className="btn-load-more"
-                    onClick={() => loadPosts(false)}
-                    disabled={loading}
-                  >
-                    {loading ? 'Chargement…' : '↓ Charger plus de discussions'}
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-
-          {/* ── Sidebar ── */}
-          <aside className="f-sidebar">
-            {/* CTA */}
-            <div className="sb-card" style={{ background: 'linear-gradient(135deg, var(--green-800), var(--green-700))', borderColor: 'var(--green-600)' }}>
-              <div className="sb-title" style={{ color: 'rgba(255,255,255,.55)' }}>🚀 Rejoins la communauté</div>
-              <p style={{ fontSize: 13, color: 'rgba(255,255,255,.8)', marginBottom: 14, lineHeight: 1.65 }}>
-                Aide les autres, gagne de l'expérience et monte en grade d'Expert.
+      <div className="forum-page">
+        <div className="forum-shell">
+          <section className="hero">
+            <div className="hero-card">
+              <p className="hero-eyebrow">Communauté BAC Mali</p>
+              <h1 className="hero-title">Forum entraide et messages étudiants</h1>
+              <p className="hero-subtitle">
+                Trouve les bonnes réponses sur l'orientation, les examens, la bourse et la vie universitaire.
+                Le forum s'adapte maintenant automatiquement au schéma de données disponible en production.
               </p>
-              {user
-                ? <div style={{ fontSize: 13, color: 'var(--gold-400)', fontWeight: 700 }}>✅ Tu es connecté(e)</div>
-                : <Link href="/compte" style={{ display: 'block', textAlign: 'center', padding: '10px', background: 'var(--gold-400)', color: 'var(--green-900)', borderRadius: 'var(--radius-md)', fontSize: 13, fontWeight: 700, textDecoration: 'none' }}>Créer un compte →</Link>
-              }
+              <div className="hero-actions">
+                {user ? (
+                  <Link href="/forum/nouveau" className="hero-btn primary">Nouvelle discussion</Link>
+                ) : (
+                  <Link href="/login" className="hero-btn primary">Se connecter</Link>
+                )}
+                <Link href="/guide" className="hero-btn secondary">Lire le guide étudiant</Link>
+              </div>
             </div>
 
-            {/* Règles */}
-            <div className="sb-card">
-              <div className="sb-title">📋 Règles du forum</div>
-              {[
-                ['🤝', 'Soyez respectueux'],
-                ['🚫', 'Pas de spam'],
-                ['🗂️', 'Bonne catégorie'],
-                ['✅', 'Marquer résolu'],
-                ['🔍', 'Chercher avant de poster'],
-              ].map(([icon, text]) => (
-                <div key={text} className="sb-rule"><span>{icon}</span><span>{text}</span></div>
-              ))}
-            </div>
-
-            {/* Grades */}
-            <div className="sb-card">
-              <div className="sb-title">🏅 Grades & Réputation</div>
-              {Object.entries(BADGE_CFG).map(([key, cfg]) => (
-                <div key={key} className="sb-badge-row">
-                  <span>{cfg.icon} <span style={{ fontWeight: 600, color: cfg.color }}>{cfg.label}</span></span>
-                  <span style={{ fontSize: 11, color: 'var(--ink-4)' }}>
-                    {key === 'nouveau' ? '0 pts'
-                     : key === 'actif' ? '50 pts'
-                     : key === 'tres_actif' ? '200 pts'
-                     : key === 'expert' ? '500 pts'
-                     : '✨'}
-                  </span>
+            <aside className="hero-side panel">
+              <div className="hero-side-grid">
+                <div className="hero-stat">
+                  <strong>{stats.posts.toLocaleString('fr-FR')}</strong>
+                  <span>discussions et salons actifs</span>
                 </div>
-              ))}
-            </div>
-          </aside>
+                <div className="hero-stat">
+                  <strong>{stats.members.toLocaleString('fr-FR')}</strong>
+                  <span>profils étudiants visibles</span>
+                </div>
+                <div className="hero-stat">
+                  <strong>{forumMode || '...'}</strong>
+                  <span>mode forum détecté côté frontend</span>
+                </div>
+              </div>
+            </aside>
+          </section>
+
+          <div className="forum-layout">
+            <main className="panel">
+              {!forumReady && (
+                <div className="warning">
+                  Le forum nécessite une configuration Supabase valide. {getSupabaseBrowserConfigError()}
+                </div>
+              )}
+
+              {error && <div className="warning">{error}</div>}
+
+              <div className="toolbar">
+                <div className="toolbar-row">
+                  <input
+                    className="search"
+                    type="text"
+                    placeholder="Rechercher une discussion..."
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                  />
+
+                  {!authLoading && (
+                    user ? (
+                      <Link href="/forum/nouveau" className="toolbar-btn primary">Poster</Link>
+                    ) : (
+                      <Link href="/login" className="toolbar-btn">Connexion</Link>
+                    )
+                  )}
+                </div>
+
+                <div className="toolbar-row">
+                  <div className="categories">
+                    {FORUM_CATEGORIES.map((item) => (
+                      <button
+                        key={item}
+                        className={`pill${category === item ? ' active' : ''}`}
+                        onClick={() => setCategory(item)}
+                        type="button"
+                      >
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="toolbar-row">
+                  <div className="sorts">
+                    {SORT_OPTIONS.map((item) => (
+                      <button
+                        key={item.key}
+                        className={`pill${sort === item.key ? ' active' : ''}`}
+                        onClick={() => setSort(item.key)}
+                        type="button"
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                  {forumMode ? <span className="mode-pill">Mode {forumMode}</span> : null}
+                </div>
+              </div>
+
+              <div className="post-list">
+                {loading && posts.length === 0 ? (
+                  <>
+                    <div className="skeleton" />
+                    <div className="skeleton" />
+                    <div className="skeleton" />
+                  </>
+                ) : posts.length === 0 ? (
+                  <div className="empty">
+                    {search
+                      ? `Aucun résultat pour "${search}".`
+                      : 'Aucune discussion trouvée pour le moment. Lance la première conversation.'}
+                  </div>
+                ) : (
+                  posts.map((post) => <PostCard key={post.id} post={post} />)
+                )}
+              </div>
+
+              {hasMore && (
+                <button className="load-more" onClick={() => loadPosts(false, offset)} type="button" disabled={loading}>
+                  {loading ? 'Chargement...' : 'Charger plus de discussions'}
+                </button>
+              )}
+            </main>
+
+            <aside>
+              <div className="sidebar-card">
+                <div className="sidebar-title">Bonnes pratiques</div>
+                <div className="sidebar-list">
+                  <span>Sois précis dans le titre pour aider les autres à te répondre vite.</span>
+                  <span>Ajoute le contexte utile: série, niveau, établissement, démarche déjà tentée.</span>
+                  <span>Marque la discussion comme résolue quand tu as obtenu une réponse utile.</span>
+                </div>
+              </div>
+
+              <div className="sidebar-card">
+                <div className="sidebar-title">Accès rapide</div>
+                <div className="sidebar-list">
+                  <Link href="/orientation">Voir les filières post-bac</Link>
+                  <Link href="/cenou">Simuler ton éligibilité CENOU</Link>
+                  <Link href="/guide">Lire les procédures étudiantes</Link>
+                </div>
+              </div>
+            </aside>
+          </div>
         </div>
       </div>
     </>
